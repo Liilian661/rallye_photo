@@ -10,11 +10,9 @@ import { signPhotoToken } from '../utils/photoToken';
 import { rateLimiter } from '../middleware/rateLimiter';
 import { scanBuffer } from '../utils/antivirusService';
 
-// Limiter sharp a 1 thread pour economiser la RAM
-sharp.concurrency(1);
-
-// --- Semaphore pour limiter les uploads concurrents ---
+// Aligner la concurrence Sharp sur le sémaphore d'upload
 const MAX_CONCURRENT_UPLOADS = 2;
+sharp.concurrency(MAX_CONCURRENT_UPLOADS);
 let activeUploads = 0;
 const uploadQueue: Array<{ resolve: () => void }> = [];
 

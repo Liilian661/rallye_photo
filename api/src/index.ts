@@ -31,6 +31,9 @@ const app    = express();
 const server = http.createServer(app);
 const PORT   = parseInt(process.env.PORT || '3001');
 
+// Trust first proxy (nginx) for correct client IP in rate limiting
+app.set('trust proxy', 1);
+
 // Init Socket.io
 app.use(compression());
 initSocketServer(server);

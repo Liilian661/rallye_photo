@@ -6,10 +6,13 @@ import { join } from 'path';
 
 const execFileAsync = promisify(execFile);
 
+// When AV_REQUIRED=true, uploads are rejected if ClamAV is unavailable or errors
+const AV_REQUIRED = process.env.AV_REQUIRED === 'true';
+
 export interface ScanResult {
   clean: boolean;
   virus?: string;
-  skipped?: boolean; // true when ClamAV is not installed — upload is allowed
+  skipped?: boolean; // true when ClamAV is not installed and AV_REQUIRED=false
 }
 
 // Cache availability check: undefined = not yet checked
@@ -32,7 +35,13 @@ async function detectClamBin(): Promise<string | null> {
 
 export async function scanBuffer(buffer: Buffer, filename = 'upload'): Promise<ScanResult> {
   const bin = await detectClamBin();
-  if (!bin) return { clean: true, skipped: true };
+  if (!bin) {
+    if (AV_REQUIRED) {
+      console.error('[AV] ClamAV indisponible mais AV_REQUIRED=true — upload refusé');
+      return { clean: false, virus: 'Antivirus indisponible (AV_REQUIRED=true)' };
+    }
+    return { clean: true, skipped: true };
+  }
 
   const safeFilename = filename.replace(/[^a-z0-9._-]/gi, '_').slice(0, 60);
   const tmpPath = join(tmpdir(), `rp-av-${Date.now()}-${safeFilename}`);
@@ -52,7 +61,11 @@ export async function scanBuffer(buffer: Buffer, filename = 'upload'): Promise<S
       return { clean: false, virus };
     }
 
-    // code 2 = scan error, ENOENT = bin disappeared, timeout, etc. → be permissive
+    // code 2 = scan error, ENOENT = bin disappeared, timeout, etc.
+    if (AV_REQUIRED) {
+      console.error('[AV] Scan error, upload refusé (AV_REQUIRED=true):', err.code, err.message?.slice(0, 100));
+      return { clean: false, virus: 'Erreur du scan antivirus' };
+    }
     console.error('[AV] Scan error (upload allowed):', err.code, err.message?.slice(0, 100));
     return { clean: true, skipped: true };
   } finally {

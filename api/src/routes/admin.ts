@@ -3,6 +3,7 @@ import pool from '../config/database';
 import { requireAdmin, AuthRequest } from '../middleware/auth';
 import { encrypt } from '../utils/encryption';
 import { testS3Connection, invalidateS3Cache } from '../utils/s3Service';
+import { logAudit } from '../utils/auditLog';
 
 const router = Router();
 
@@ -514,15 +515,22 @@ router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Pro
     }
 
     const { generateAccessToken, generateRefreshToken, hashToken } = require('../utils/crypto');
+    const { v4: uuidv4 } = require('uuid');
 
-    const accessToken = generateAccessToken({ userId: user.id, email: user.email });
+    const adminId = req.user!.userId;
+    const accessToken = generateAccessToken({ userId: user.id, email: user.email, impersonatedBy: adminId });
     const refreshToken = generateRefreshToken();
     const hashedRefresh = hashToken(refreshToken);
 
     await pool.execute(
       'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))',
-      [require('uuid').v4(), user.id, hashedRefresh]
+      [uuidv4(), user.id, hashedRefresh]
     );
+
+    await logAudit('admin.impersonate', {
+      userId: adminId,
+      details: { targetUserId: user.id, targetEmail: user.email },
+    });
 
     res.json({
       accessToken,
@@ -533,6 +541,7 @@ router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Pro
         lastName: user.last_name,
         email: user.email,
         plan: user.plan,
+        impersonated: true,
       },
     });
   } catch (error) {

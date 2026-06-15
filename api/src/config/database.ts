@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const rawPool = mysql.createPool({
+const pool = mysql.createPool({
   host: process.env.DB_HOST,
   port: parseInt(process.env.DB_PORT || '3306'),
   user: process.env.DB_USER,
@@ -14,39 +14,18 @@ const rawPool = mysql.createPool({
   queueLimit: 0,
   ssl: process.env.DB_SSL === 'true' ? {} : undefined,
   connectTimeout: 10000,
-  // Force mysql2 a interpreter les DATETIME comme UTC (pas le fuseau local du VPS)
   timezone: '+00:00',
 });
 
-// Wrapper: chaque execute/query force d'abord SET time_zone UTC sur la connexion
-// pour que NOW(), CURRENT_TIMESTAMP, etc. retournent de l'UTC
-const pool = {
-  async execute(...args: Parameters<typeof rawPool.execute>) {
-    const conn = await rawPool.getConnection();
-    try {
-      await conn.execute("SET time_zone = '+00:00'");
-      const result = await conn.execute(...args as [any, ...any[]]);
-      return result;
-    } finally {
-      conn.release();
-    }
-  },
-  async query(...args: Parameters<typeof rawPool.query>) {
-    const conn = await rawPool.getConnection();
-    try {
-      await conn.execute("SET time_zone = '+00:00'");
-      const result = await conn.query(...args as [any, ...any[]]);
-      return result;
-    } finally {
-      conn.release();
-    }
-  },
-  async getConnection() {
-    const conn = await rawPool.getConnection();
-    await conn.execute("SET time_zone = '+00:00'");
-    return conn;
-  },
-} as unknown as mysql.Pool;
+// Set UTC session timezone once per new physical connection (not per query)
+const internalPool: any = (pool as any).pool;
+if (typeof internalPool?.on === 'function') {
+  internalPool.on('connection', (conn: any) => {
+    conn.query("SET time_zone = '+00:00'");
+  });
+} else {
+  console.warn('[DB] Cannot hook connection event — time_zone may not be UTC');
+}
 
 export async function testConnection(): Promise<void> {
   try {

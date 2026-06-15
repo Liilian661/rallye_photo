@@ -35,15 +35,16 @@ router.post('/stripe', async (req: Request, res: Response): Promise<void> => {
   res.status(200).json({ received: true });
 
   try {
+    const stripeEventId: string = event.id;
     switch (event.type) {
       case 'checkout.session.completed':
-        await handleCheckoutCompleted(event.data.object);
+        await handleCheckoutCompleted(event.data.object, stripeEventId);
         break;
       case 'customer.subscription.deleted':
-        await handleSubscriptionDeleted(event.data.object);
+        await handleSubscriptionDeleted(event.data.object, stripeEventId);
         break;
       case 'customer.subscription.updated':
-        await handleSubscriptionUpdated(event.data.object);
+        await handleSubscriptionUpdated(event.data.object, stripeEventId);
         break;
       default:
         break;
@@ -55,12 +56,22 @@ router.post('/stripe', async (req: Request, res: Response): Promise<void> => {
 
 // ---------- HANDLERS ----------
 
-async function handleCheckoutCompleted(session: any) {
+async function handleCheckoutCompleted(session: any, stripeEventId: string) {
   const userId  = session.metadata?.user_id as string | undefined;
   const type    = session.metadata?.type as string | undefined; // 'credit' | 'pro'
 
   if (!userId) {
     console.warn('[Webhook] checkout.session.completed: missing user_id in metadata');
+    return;
+  }
+
+  // Idempotency guard: skip if this Stripe event was already processed
+  const [dupes] = await pool.execute(
+    "SELECT id FROM audit_logs WHERE details LIKE CONCAT('%', ?, '%') LIMIT 1",
+    [stripeEventId]
+  );
+  if ((dupes as any[]).length > 0) {
+    console.log('[Webhook] Duplicate event, skipping:', stripeEventId);
     return;
   }
 
@@ -72,7 +83,7 @@ async function handleCheckoutCompleted(session: any) {
     );
     await logAudit('credit.purchase', {
       userId,
-      details: { quantity, sessionId: session.id, amountTotal: session.amount_total },
+      details: { quantity, sessionId: session.id, stripeEventId, amountTotal: session.amount_total },
     });
     console.log('[Webhook] +', quantity, 'event credit(s) added to user', userId);
   }
@@ -90,13 +101,13 @@ async function handleCheckoutCompleted(session: any) {
     );
     await logAudit('plan.upgrade', {
       userId,
-      details: { plan: 'pro', sessionId: session.id, stripeCustomerId },
+      details: { plan: 'pro', sessionId: session.id, stripeEventId, stripeCustomerId },
     });
     console.log('[Webhook] User upgraded to Pro:', userId);
   }
 }
 
-async function handleSubscriptionDeleted(subscription: any) {
+async function handleSubscriptionDeleted(subscription: any, _stripeEventId: string) {
   const stripeCustomerId = subscription.customer as string;
   // Stripe sends current_period_end as Unix timestamp
   const endsAt = new Date((subscription.current_period_end as number) * 1000);
@@ -149,7 +160,7 @@ async function handleSubscriptionDeleted(subscription: any) {
   console.log('[Webhook] Pro subscription cancelled for user:', user.id, 'grace until:', gracePeriodEnd.toISOString());
 }
 
-async function handleSubscriptionUpdated(subscription: any) {
+async function handleSubscriptionUpdated(subscription: any, _stripeEventId: string) {
   // Handle renewals: re-activate Pro and remove any grace period locks
   if (subscription.status === 'active') {
     const stripeCustomerId = subscription.customer as string;

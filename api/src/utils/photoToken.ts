@@ -2,7 +2,10 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 
 // Pepper global - ne change jamais, stocke dans l'env
-const PHOTO_PEPPER = process.env.PHOTO_PEPPER || 'rp-pepper-change-me-in-production';
+const PHOTO_PEPPER = process.env.PHOTO_PEPPER;
+if (!PHOTO_PEPPER) {
+  throw new Error('[Startup] PHOTO_PEPPER est requis. Définissez-le dans votre .env');
+}
 
 /**
  * Genere un secret unique par event (appele a la creation de l'event)

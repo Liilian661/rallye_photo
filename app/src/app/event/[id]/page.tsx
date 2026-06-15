@@ -100,6 +100,7 @@ export default function EventPage() {
   const [expandedChallenge, setExpandedChallenge] = useState<string | null>(null);
   const [uploadingChallengeId, setUploadingChallengeId] = useState<string | null>(null);
   const [uploadProgress, setUploadProgress] = useState('');
+  const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
   const [votedChallenges, setVotedChallenges] = useState<Record<string, string>>({});
   const [voteCounts, setVoteCounts] = useState<Record<string, Record<string, number>>>({});
@@ -295,6 +296,7 @@ export default function EventPage() {
     }
 
     setUploadingChallengeId(challengeId);
+    setUploadPercent(0);
 
     const isVideoFile = file.type.startsWith('video/');
     setUploadProgress(attempt > 1 ? `Nouvel essai (${attempt}/${MAX_RETRIES})...` : isVideoFile ? 'Envoi de la video...' : 'Compression...');
@@ -310,7 +312,17 @@ export default function EventPage() {
       await api.post(
         `/events/${eventId}/challenges/${challengeId}/submit`,
         formData,
-        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: isVideoFile ? 120000 : 60000 }
+        {
+          headers: { 'Content-Type': 'multipart/form-data' },
+          timeout: isVideoFile ? 120000 : 60000,
+          onUploadProgress: (progressEvent: any) => {
+            if (progressEvent.total) {
+              const pct = Math.round((progressEvent.loaded / progressEvent.total) * 100);
+              setUploadPercent(pct);
+              setUploadProgress(pct < 100 ? `Envoi ${pct}%...` : 'Traitement...');
+            }
+          },
+        }
       );
 
       setUploadSuccess(challengeId);
@@ -688,7 +700,16 @@ export default function EventPage() {
                     {isUploading ? (
                       <div className="upload-zone" style={{ borderStyle: 'solid', borderColor: 'var(--rp-pink)', background: 'var(--rp-pink-light)' }}>
                         <div style={{ marginBottom: 8 }}><IconLoader size={36} color="var(--rp-pink)" /></div>
-                        <p style={{ fontWeight: 600, color: 'var(--rp-pink)' }}>{uploadProgress}</p>
+                        <p style={{ fontWeight: 600, color: 'var(--rp-pink)', marginBottom: 8 }}>{uploadProgress}</p>
+                        {uploadPercent > 0 && uploadPercent < 100 && (
+                          <div style={{ width: '100%', height: 4, background: 'rgba(0,0,0,0.1)', borderRadius: 2, overflow: 'hidden' }}>
+                            <div style={{
+                              width: `${uploadPercent}%`, height: '100%',
+                              background: 'var(--rp-pink)', borderRadius: 2,
+                              transition: 'width 0.2s ease',
+                            }} />
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div style={{ display: 'flex', gap: 8 }}>

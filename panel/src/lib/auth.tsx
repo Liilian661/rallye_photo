@@ -32,6 +32,8 @@ interface RegisterData {
   referralCode?: string;
 }
 
+const COOKIE_OPTS = { sameSite: 'strict' as const };
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -52,8 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = async (email: string, password: string) => {
     const { data } = await api.post('/auth/login', { email, password });
-    Cookies.set('accessToken', data.accessToken, { expires: 1 });
-    Cookies.set('refreshToken', data.refreshToken, { expires: 30 });
+    Cookies.set('accessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
+    Cookies.set('refreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
     try {
       const { data: profile } = await api.get('/auth/me');
       const fullUser = {
@@ -65,10 +67,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         eventCredits: profile.eventCredits ?? 0,
         emailVerified: !!profile.emailVerified,
       };
-      Cookies.set('user', JSON.stringify(fullUser), { expires: 30 });
+      Cookies.set('user', JSON.stringify(fullUser), { expires: 30, ...COOKIE_OPTS });
       setUser(fullUser);
     } catch {
-      Cookies.set('user', JSON.stringify(data.user), { expires: 30 });
+      Cookies.set('user', JSON.stringify(data.user), { expires: 30, ...COOKIE_OPTS });
       setUser(data.user);
     }
   };
@@ -76,9 +78,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const register = async (registerData: RegisterData) => {
     const { data } = await api.post('/auth/register', registerData);
     const newUser = { ...data.user, emailVerified: false };
-    Cookies.set('accessToken', data.accessToken, { expires: 1 });
-    Cookies.set('refreshToken', data.refreshToken, { expires: 30 });
-    Cookies.set('user', JSON.stringify(newUser), { expires: 30 });
+    Cookies.set('accessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
+    Cookies.set('refreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
+    Cookies.set('user', JSON.stringify(newUser), { expires: 30, ...COOKIE_OPTS });
     setUser(newUser);
   };
 
@@ -94,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         eventCredits: profile.eventCredits ?? 0,
         emailVerified: !!profile.emailVerified,
       };
-      Cookies.set('user', JSON.stringify(updatedUser), { expires: 30 });
+      Cookies.set('user', JSON.stringify(updatedUser), { expires: 30, ...COOKIE_OPTS });
       setUser(updatedUser);
     } catch {
       // ignore
