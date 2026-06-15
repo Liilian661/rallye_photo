@@ -12,7 +12,7 @@ const navItems = [
   { href: '/dashboard/events',      label: 'Evenements',   icon: IconCalendar },
   { href: '/dashboard/pricing',     label: 'Tarification', icon: IconStar },
   { href: '/dashboard/affiliates',  label: 'Affiliation',  icon: IconUsers },
-  { href: '/dashboard/settings',    label: 'Parametres',   icon: IconSettings },
+  { href: '/dashboard/settings',    label: 'Mon compte',   icon: IconSettings },
 ];
 
 export default function Sidebar() {
@@ -232,6 +232,11 @@ export default function Sidebar() {
                 </p>
                 <p style={{ fontSize: 9, color: 'var(--rp-text-muted)' }}>
                   Plan {user?.plan}
+                  {(user?.eventCredits ?? 0) > 0 && (
+                    <span style={{ marginLeft: 6, color: 'var(--rp-accent)', fontWeight: 700 }}>
+                      · {user?.eventCredits} crédit{(user?.eventCredits ?? 0) > 1 ? 's' : ''}
+                    </span>
+                  )}
                 </p>
               </div>
             </div>
