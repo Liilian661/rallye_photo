@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   INDEX idx_audit_user    (user_id),
   INDEX idx_audit_action  (action),
   INDEX idx_audit_created (created_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 2. Colonnes affiliation + stripe sur users
 ALTER TABLE users
@@ -36,7 +36,7 @@ CREATE TABLE IF NOT EXISTS referrals (
   converted_at DATETIME                                  NULL,
   UNIQUE KEY uk_referred (referred_id),
   INDEX idx_ref_referrer (referrer_id)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 4. Colonne grace period Pro sur events
 ALTER TABLE events
