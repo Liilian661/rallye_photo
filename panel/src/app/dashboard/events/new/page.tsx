@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import { templates, Template } from '@/lib/templates';
+import { useAuth } from '@/lib/auth';
 
 export default function NewEventPage() {
   const [name, setName] = useState('');
@@ -17,6 +18,7 @@ export default function NewEventPage() {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const router = useRouter();
+  const { refreshUser } = useAuth();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,6 +57,7 @@ export default function NewEventPage() {
         }
       }
 
+      await refreshUser(); // met à jour les crédits dans la sidebar
       router.push(`/dashboard/events/${data.id}`);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Erreur lors de la création');
