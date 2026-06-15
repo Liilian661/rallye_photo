@@ -4,7 +4,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import { getParticipant } from '@/lib/participant';
-import { IconCamera, IconCheckCircle, IconLock, IconClock, IconAlarm, IconLoader, IconGallery, IconCheck, IconX } from '@/lib/icons';
+import { IconCamera, IconCheckCircle, IconLock, IconClock, IconAlarm, IconLoader, IconGallery, IconX } from '@/lib/icons';
 import CameraModal from '@/components/CameraModal';
 import { io, Socket } from 'socket.io-client';
 import { enqueueUpload, getPendingUploads, removeFromQueue, restoreFile, getQueueSize } from '@/lib/offlineQueue';
@@ -29,8 +29,6 @@ interface Challenge {
   is_surprise: boolean;
   status: string;
   theme_color?: string;
-  vote_enabled: number;
-  vote_closed: number;
 }
 
 interface Submission {
@@ -102,8 +100,6 @@ export default function EventPage() {
   const [uploadProgress, setUploadProgress] = useState('');
   const [uploadPercent, setUploadPercent] = useState(0);
   const [uploadSuccess, setUploadSuccess] = useState<string | null>(null);
-  const [votedChallenges, setVotedChallenges] = useState<Record<string, string>>({});
-  const [voteCounts, setVoteCounts] = useState<Record<string, Record<string, number>>>({});
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [previewType, setPreviewType] = useState<string>('photo');
   const [alertChallenges, setAlertChallenges] = useState<{title: string; points: number}[] | null>(null);
@@ -163,23 +159,6 @@ export default function EventPage() {
     }
   }, [event?.theme_color]);
 
-  const loadVotes = useCallback(async () => {
-    for (const c of challenges) {
-      if (c.vote_enabled) {
-        try {
-          const { data } = await api.get(`/challenges/${c.id}/votes`);
-          const counts: Record<string, number> = {};
-          for (const v of data.votes) { counts[v.submission_id] = v.vote_count; }
-          setVoteCounts(prev => ({ ...prev, [c.id]: counts }));
-        } catch { /* ignore */ }
-      }
-    }
-  }, [challenges]);
-
-  useEffect(() => {
-    if (challenges.length > 0) loadVotes();
-  }, [challenges, loadVotes]);
-
   useEffect(() => {
     if (!event) return;
     const update = () => {
@@ -221,9 +200,6 @@ export default function EventPage() {
     socket.on('winner-selected', () => loadData());
     socket.on('winner-revealed', () => loadData());
     socket.on('leaderboard-updated', () => loadData());
-    socket.on('vote-enabled', () => loadData());
-    socket.on('vote-closed', () => loadData());
-    socket.on('vote-cast', () => loadVotes());
     socket.on('online-count', (count: number) => setOnlineCount(count));
     socket.on('new-challenges-alert', (data: any) => {
       if (data && data.challenges) {
@@ -238,7 +214,7 @@ export default function EventPage() {
       socket.emit('leave-event', eventId);
       socket.disconnect();
     };
-  }, [eventId, loadData, loadVotes]);
+  }, [eventId, loadData]);
 
   const processOfflineQueue = useCallback(async () => {
     const pending = await getPendingUploads();
@@ -370,16 +346,6 @@ export default function EventPage() {
       if (file) handleUpload(challengeId, file);
     };
     input.click();
-  };
-
-  const castVote = async (challengeId: string, submissionId: string) => {
-    try {
-      await api.post(`/challenges/${challengeId}/vote`, { participantId, submissionId });
-      setVotedChallenges(prev => ({ ...prev, [challengeId]: submissionId }));
-      await loadVotes();
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Erreur');
-    }
   };
 
   const mySubmissions = submissions.filter(s => s.participant_id === participantId);
@@ -732,64 +698,6 @@ export default function EventPage() {
                   </div>
                 )}
 
-                {!!challenge.vote_enabled && !challenge.vote_closed && isPastDeadline && (() => {
-                  const challengeSubs = submissions.filter(s => s.challenge_id === challenge.id);
-                  const myVote = votedChallenges[challenge.id];
-                  const counts = voteCounts[challenge.id] || {};
-                  if (challengeSubs.length === 0) return null;
-
-                  return (
-                    <div style={{ marginTop: 16 }} onClick={(e) => e.stopPropagation()}>
-                      <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--rp-blue)', marginBottom: 10, textAlign: 'center' }}>
-                        Votez pour votre photo preferee !
-                      </p>
-                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
-                        {challengeSubs.map((sub) => {
-                          const isOwn = sub.participant_id === participantId;
-                          const isVoted = myVote === sub.id;
-                          const voteCount = counts[sub.id] || 0;
-
-                          return (
-                            <div key={sub.id} style={{
-                              borderRadius: 12,
-                              border: isVoted ? '2px solid var(--rp-blue)' : '1px solid var(--rp-border)',
-                              overflow: 'hidden',
-                              background: isVoted ? 'var(--rp-blue-light)' : '#fff',
-                              opacity: isOwn ? 0.5 : 1,
-                            }}>
-                              {sub.media_type === 'video' ? (
-                                <video src={sub.photo_url} playsInline muted loop autoPlay style={{ width: '100%', height: 100, objectFit: 'cover', display: 'block' }} />
-                              ) : (
-                                <img src={sub.photo_url} alt="Photo" style={{ width: '100%', height: 100, objectFit: 'cover', display: 'block' }} />
-                              )}
-                              <div style={{ padding: '6px 8px', textAlign: 'center' }}>
-                                <p style={{ fontSize: 11, fontWeight: 500, color: 'var(--rp-text)', marginBottom: 4 }}>
-                                  {isOwn ? 'Vous' : (sub.participant_name || 'Participant')}
-                                </p>
-                                {voteCount > 0 && (
-                                  <p style={{ fontSize: 10, color: 'var(--rp-blue)', fontWeight: 700, marginBottom: 4 }}>
-                                    {voteCount} vote{voteCount > 1 ? 's' : ''}
-                                  </p>
-                                )}
-                                {!myVote && !isOwn && (
-                                  <button onClick={() => castVote(challenge.id, sub.id)} style={{
-                                    width: '100%', padding: '4px 8px', borderRadius: 6, border: 'none',
-                                    background: 'var(--rp-blue)', color: '#fff', fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                                  }}>
-                                    Voter
-                                  </button>
-                                )}
-                                {isVoted && (
-                                  <p style={{ fontSize: 10, color: 'var(--rp-blue)', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2 }}><IconCheck size={12} color="var(--rp-blue)" /> Votre vote</p>
-                                )}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
             );
           })}

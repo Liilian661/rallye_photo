@@ -4,7 +4,6 @@ export const EVENT_TIER_LIMITS = {
     challenges: 5,
     participants: 20,
     galleryDays: 2,
-    publicVote: false,
     surpriseChallenges: false,
     branding: false,
     exportZip: false,
@@ -13,7 +12,6 @@ export const EVENT_TIER_LIMITS = {
     challenges: -1,   // illimité
     participants: 150,
     galleryDays: 60,
-    publicVote: true,
     surpriseChallenges: true,
     branding: true,
     exportZip: true,
@@ -22,7 +20,6 @@ export const EVENT_TIER_LIMITS = {
     challenges: -1,
     participants: -1, // illimité
     galleryDays: 365,
-    publicVote: true,
     surpriseChallenges: true,
     branding: true,
     exportZip: true,

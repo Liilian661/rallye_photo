@@ -181,7 +181,7 @@ export async function sendProCancellationEmail(
     <ul style="color:#6B5A8E;font-size:13px;line-height:1.8;margin:0 0 20px;padding-left:20px;">
       <li>Vos &#233;v&#233;nements passent aux limites du plan Gratuit (5 d&#233;fis, 20 participants)</li>
       <li>L&apos;acc&#232;s aux galeries est limit&#233; &#224; 48h apr&#232;s la deadline</li>
-      <li>Le vote du public et l&apos;export ZIP ne seront plus disponibles</li>
+      <li>L&apos;export ZIP ne sera plus disponible</li>
     </ul>
 
     <div style="text-align:center;margin:0 0 16px;">

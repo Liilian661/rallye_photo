@@ -32,8 +32,6 @@ interface Challenge {
   points: number;
   status: string;
   is_surprise: boolean;
-  vote_enabled: number;
-  vote_closed: number;
   notified: number;
 }
 
@@ -140,9 +138,6 @@ export default function EventDetailPage() {
     socket.on('winner-selected', () => loadData());
     socket.on('winner-revealed', () => loadData());
     socket.on('leaderboard-updated', () => loadData());
-    socket.on('vote-enabled', () => loadData());
-    socket.on('vote-closed', () => loadData());
-    socket.on('vote-cast', () => loadData());
 
     socketRef.current = socket;
 
@@ -203,25 +198,6 @@ export default function EventDetailPage() {
     try {
       await api.delete(`/events/${eventId}`);
       router.push('/dashboard/events');
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Erreur');
-    }
-  };
-
-  const enableVote = async (challengeId: string) => {
-    try {
-      await api.post(`/challenges/${challengeId}/enable-vote`);
-      loadData();
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Erreur');
-    }
-  };
-
-  const closeVote = async (challengeId: string) => {
-    if (!confirm('Fermer le vote et designer le gagnant automatiquement ?')) return;
-    try {
-      await api.post(`/challenges/${challengeId}/close-vote`);
-      loadData();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }
@@ -814,35 +790,6 @@ export default function EventDetailPage() {
                               );
                             })}
                           </div>
-
-                          {event.scoring_mode !== 'participation' && isPastDeadline && !winner && !challenge.vote_enabled && !challenge.vote_closed && challengeSubmissions.length >= 2 && (
-                            <div style={{ marginTop: 8 }}>
-                              <button onClick={() => enableVote(challenge.id)} style={{
-                                padding: '6px 16px', borderRadius: 50,
-                                border: '1.5px solid var(--rp-secondary)', background: 'var(--rp-secondary-light)',
-                                color: 'var(--rp-secondary-text)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
-                              }}>
-                                Activer le vote du public
-                              </button>
-                            </div>
-                          )}
-
-                          {event.scoring_mode !== 'participation' && challenge.vote_enabled && !challenge.vote_closed && !winner && (
-                            <div style={{
-                              marginTop: 8, padding: '10px 14px', borderRadius: 10,
-                              background: 'var(--rp-secondary-light)',
-                              display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                            }}>
-                              <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--rp-secondary-text)' }}>Vote en cours...</p>
-                              <button onClick={() => closeVote(challenge.id)} style={{
-                                padding: '5px 14px', borderRadius: 50, border: 'none',
-                                background: 'var(--rp-secondary)', color: '#fff',
-                                fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                              }}>
-                                Fermer le vote
-                              </button>
-                            </div>
-                          )}
 
                           {event.scoring_mode !== 'participation' && winner && challenge.status === 'judged' && (
                             <button className="btn-gradient" onClick={() => revealWinner(challenge.id)}

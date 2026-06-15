@@ -280,7 +280,7 @@ export default function NewEventPage() {
                 />
                 <div>
                   <p style={{ fontSize: 13, fontWeight: 600, color: 'var(--rp-text-primary)' }}>Competitif - 1 gagnant par defi</p>
-                  <p style={{ fontSize: 11, color: 'var(--rp-text-muted)', marginTop: 2 }}>L&apos;organisateur ou le vote du public designe un gagnant qui remporte les points</p>
+                  <p style={{ fontSize: 11, color: 'var(--rp-text-muted)', marginTop: 2 }}>L&apos;organisateur designe un gagnant qui remporte les points</p>
                 </div>
               </label>
               <label style={{
