@@ -29,6 +29,7 @@ interface RegisterData {
   email: string;
   password: string;
   newsletter: boolean;
+  referralCode?: string;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
