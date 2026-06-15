@@ -34,6 +34,10 @@ export default function AffiliatesPage() {
   const [data, setData] = useState<AffiliateData | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [editingCode, setEditingCode] = useState(false);
+  const [newCode, setNewCode] = useState('');
+  const [codeError, setCodeError] = useState('');
+  const [codeSaving, setCodeSaving] = useState(false);
 
   const loadData = useCallback(async () => {
     try {
@@ -54,6 +58,35 @@ export default function AffiliatesPage() {
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     });
+  };
+
+  const startEditCode = () => {
+    setNewCode(data?.referralCode || '');
+    setCodeError('');
+    setEditingCode(true);
+  };
+
+  const saveCode = async () => {
+    const clean = newCode.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+    if (clean.length < 4 || clean.length > 8) {
+      setCodeError('Entre 4 et 8 caractères alphanumériques');
+      return;
+    }
+    setCodeSaving(true);
+    setCodeError('');
+    try {
+      const { data: result } = await api.patch('/affiliates/me/code', { code: clean });
+      setData((prev) => prev ? {
+        ...prev,
+        referralCode: result.referralCode,
+        referralLink: prev.referralLink.replace(/ref=[^&]+/, `ref=${result.referralCode}`),
+      } : prev);
+      setEditingCode(false);
+    } catch (err: any) {
+      setCodeError(err.response?.data?.error || 'Erreur lors de la sauvegarde');
+    } finally {
+      setCodeSaving(false);
+    }
   };
 
   if (loading) return <p style={{ color: 'var(--rp-text-muted)', padding: '2rem 0' }}>Chargement...</p>;
@@ -104,9 +137,56 @@ export default function AffiliatesPage() {
             {copied ? '✓ Copié' : 'Copier'}
           </button>
         </div>
-        <p style={{ fontSize: 12, color: 'var(--rp-text-muted)', marginTop: 8 }}>
-          Code : <span style={{ fontWeight: 700, color: 'var(--rp-accent)', fontFamily: 'monospace', fontSize: 14 }}>{data.referralCode}</span>
-        </p>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 8 }}>
+          <span style={{ fontSize: 12, color: 'var(--rp-text-muted)' }}>Code :</span>
+          {editingCode ? (
+            <>
+              <input
+                value={newCode}
+                onChange={(e) => setNewCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8))}
+                placeholder="4-8 caractères"
+                autoFocus
+                style={{
+                  fontFamily: 'monospace', fontSize: 14, fontWeight: 700,
+                  color: 'var(--rp-accent)', background: 'var(--rp-bg)',
+                  border: '1.5px solid var(--rp-accent)', borderRadius: 6,
+                  padding: '2px 8px', width: 110, outline: 'none',
+                }}
+              />
+              <button
+                onClick={saveCode}
+                disabled={codeSaving}
+                className="btn-primary"
+                style={{ fontSize: 12, padding: '3px 12px' }}
+              >
+                {codeSaving ? '…' : 'OK'}
+              </button>
+              <button
+                onClick={() => setEditingCode(false)}
+                className="btn-ghost"
+                style={{ fontSize: 12, padding: '3px 8px' }}
+              >
+                Annuler
+              </button>
+            </>
+          ) : (
+            <>
+              <span style={{ fontWeight: 700, color: 'var(--rp-accent)', fontFamily: 'monospace', fontSize: 14 }}>
+                {data.referralCode}
+              </span>
+              <button
+                onClick={startEditCode}
+                className="btn-ghost"
+                style={{ fontSize: 11, padding: '2px 8px' }}
+              >
+                Modifier
+              </button>
+            </>
+          )}
+        </div>
+        {codeError && (
+          <p style={{ fontSize: 11, color: 'var(--rp-danger-text)', marginTop: 4 }}>{codeError}</p>
+        )}
       </div>
 
       {/* Stats */}

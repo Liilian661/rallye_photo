@@ -59,4 +59,41 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
   }
 });
 
+// PATCH /affiliates/me/code — Personnaliser son code de parrainage
+router.patch('/me/code', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const userId = req.user!.userId;
+    const { code } = req.body;
+
+    if (!code || typeof code !== 'string') {
+      res.status(400).json({ error: 'Code requis' });
+      return;
+    }
+
+    const clean = code.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+    if (clean.length < 4 || clean.length > 8) {
+      res.status(400).json({ error: 'Le code doit contenir entre 4 et 8 caractères alphanumériques' });
+      return;
+    }
+
+    // Vérifier unicité
+    const [existing] = await pool.execute(
+      'SELECT id FROM users WHERE referral_code = ? AND id != ?',
+      [clean, userId]
+    );
+    if ((existing as any[]).length > 0) {
+      res.status(409).json({ error: 'Ce code est déjà utilisé, choisissez-en un autre' });
+      return;
+    }
+
+    await pool.execute('UPDATE users SET referral_code = ? WHERE id = ?', [clean, userId]);
+
+    res.json({ referralCode: clean });
+  } catch (error) {
+    console.error('Affiliates PATCH /me/code error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
 export default router;
