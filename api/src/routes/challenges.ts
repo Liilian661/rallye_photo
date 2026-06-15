@@ -5,6 +5,8 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import { validateBody } from '../middleware/validateInput';
 import { createChallengeSchema } from '../utils/validators';
 import { emitToEvent } from '../config/socket';
+import { getEventLimit } from '../config/plans';
+import { deleteFromS3 } from '../utils/s3Service';
 
 const router = Router();
 
@@ -29,7 +31,7 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
     const { title, description, points, isSurprise } = req.body;
 
     const [eventRows] = await pool.execute(
-      'SELECT id FROM events WHERE id = ? AND user_id = ?',
+      'SELECT id, tier FROM events WHERE id = ? AND user_id = ?',
       [eventId, req.user!.userId]
     );
     if ((eventRows as any[]).length === 0) {
@@ -37,18 +39,19 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
       return;
     }
 
+    const tier = (eventRows as any[])[0]?.tier || 'free';
+
     const [challengeCount] = await pool.execute(
       'SELECT COUNT(*) as count FROM challenges WHERE event_id = ?',
       [eventId]
     );
     const count = (challengeCount as any[])[0].count;
+    const limit = getEventLimit(tier, 'challenges');
 
-    const [userRows] = await pool.execute('SELECT plan FROM users WHERE id = ?', [req.user!.userId]);
-    const plan = (userRows as any[])[0]?.plan || 'free';
-
-    const limits: Record<string, number> = { free: 2, starter: 10, pro: 999999 };
-    if (count >= (limits[plan] || 2)) {
-      res.status(403).json({ error: 'Limite de defis atteinte pour le plan ' + plan });
+    if (count >= limit) {
+      res.status(403).json({
+        error: `Limite de ${limit} defis atteinte pour les evenements gratuits. Achetez un credit Event ou passez au Pro.`,
+      });
       return;
     }
 
@@ -343,7 +346,7 @@ router.post('/challenges/:id/reveal', requireAuth, async (req: AuthRequest, res:
 router.delete('/challenges/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const [rows] = await pool.execute(
-      'SELECT c.id FROM challenges c JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
+      'SELECT c.id, c.event_id FROM challenges c JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
       [req.params.id, req.user!.userId]
     );
     if ((rows as any[]).length === 0) {
@@ -351,9 +354,22 @@ router.delete('/challenges/:id', requireAuth, async (req: AuthRequest, res: Resp
       return;
     }
 
-    // Delete votes first
+    // Collect S3 keys before deletion
+    const [subRows] = await pool.execute(
+      'SELECT photo_key FROM submissions WHERE challenge_id = ? AND photo_key IS NOT NULL',
+      [req.params.id]
+    );
+    const s3Keys: string[] = (subRows as any[]).map((s: any) => s.photo_key);
+
     await pool.execute('DELETE FROM votes WHERE challenge_id = ?', [req.params.id]);
+    await pool.execute('DELETE FROM submissions WHERE challenge_id = ?', [req.params.id]);
     await pool.execute('DELETE FROM challenges WHERE id = ?', [req.params.id]);
+
+    // Delete S3 files (non-blocking)
+    if (s3Keys.length > 0) {
+      Promise.all(s3Keys.map(key => deleteFromS3(key).catch(err => console.error('S3 delete error for', key, err)))).catch(() => {});
+    }
+
     res.json({ message: 'Defi supprime' });
   } catch (error) {
     console.error('Delete challenge error:', error);

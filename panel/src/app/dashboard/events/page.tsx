@@ -9,8 +9,27 @@ interface Event {
   name: string;
   code: string;
   status: string;
+  tier: string;
   deadline: string;
   created_at: string;
+}
+
+function TierBadge({ tier }: { tier: string }) {
+  const map: Record<string, { label: string; color: string }> = {
+    free:    { label: 'Gratuit',    color: 'var(--rp-text-muted)' },
+    premium: { label: 'Événement',  color: '#f59e0b' },
+    pro:     { label: 'Pro',        color: 'var(--rp-accent)' },
+  };
+  const t = map[tier] ?? map.free;
+  return (
+    <span style={{
+      fontSize: 11, fontWeight: 700, padding: '2px 8px',
+      borderRadius: 50, border: `1px solid ${t.color}`,
+      color: t.color, letterSpacing: '0.02em',
+    }}>
+      {t.label}
+    </span>
+  );
 }
 
 export default function EventsPage() {
@@ -91,9 +110,12 @@ export default function EventsPage() {
                     Deadline : {new Date(event.deadline).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}
                   </p>
                 </div>
-                <span className={`badge ${event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'badge-success' : 'badge-muted'}`}>
-                  {event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'Actif' : new Date(event.deadline).getTime() <= Date.now() ? 'Expire' : event.status}
-                </span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
+                  <span className={`badge ${event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'badge-success' : 'badge-muted'}`}>
+                    {event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'Actif' : new Date(event.deadline).getTime() <= Date.now() ? 'Expire' : event.status}
+                  </span>
+                  <TierBadge tier={event.tier || 'free'} />
+                </div>
               </div>
             </Link>
           ))}

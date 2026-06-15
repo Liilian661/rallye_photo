@@ -15,9 +15,14 @@ interface Event {
   code: string;
   qr_code_url: string;
   status: string;
+  tier: string;
   scoring_mode: string;
   team_mode: number;
   theme_color: string;
+  logo_key: string | null;
+  banner_key: string | null;
+  logo_url: string | null;
+  banner_url: string | null;
 }
 
 interface Challenge {
@@ -590,6 +595,23 @@ export default function EventDetailPage() {
             style={{ padding: '6px 16px', fontSize: 13 }}>
             {isPastDeadline ? 'Expire' : event.status === 'active' ? 'Actif' : event.status}
           </span>
+          {(() => {
+            const tierMap: Record<string, { label: string; color: string }> = {
+              free:    { label: 'Gratuit',   color: 'var(--rp-text-muted)' },
+              premium: { label: 'Événement', color: '#f59e0b' },
+              pro:     { label: 'Pro',       color: 'var(--rp-accent)' },
+            };
+            const t = tierMap[event.tier || 'free'] ?? tierMap.free;
+            return (
+              <span style={{
+                fontSize: 12, fontWeight: 700, padding: '4px 12px',
+                borderRadius: 50, border: `1.5px solid ${t.color}`,
+                color: t.color,
+              }}>
+                {t.label}
+              </span>
+            );
+          })()}
           <button
             onClick={openEditModal}
             className="btn-secondary"
@@ -771,14 +793,14 @@ export default function EventDetailPage() {
                                       style={{ width: '100%', height: 140, objectFit: 'cover', cursor: 'pointer', display: 'block' }}
                                     />
                                   )}
-                                  {!!!!sub.is_winner && (
+                                  {sub.is_winner && (
                                     <div style={{ position: 'absolute', top: 6, right: 6, background: 'var(--rp-accent)', color: 'var(--rp-accent-text)', fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 50 }}>
                                       GAGNANT
                                     </div>
                                   )}
                                   <div style={{ padding: '8px 10px' }}>
                                     <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--rp-text-primary)', marginBottom: 4 }}>{sub.participant_name}</p>
-                                    {event.scoring_mode !== 'participation' && isPastDeadline && !winner && !!!challenge.vote_enabled && (
+                                    {event.scoring_mode !== 'participation' && isPastDeadline && !winner && !challenge.vote_enabled && (
                                       <button onClick={() => selectWinner(challenge.id, sub.id)} style={{
                                         width: '100%', padding: '4px 8px', borderRadius: 6, border: 'none',
                                         background: 'var(--rp-accent)', color: 'var(--rp-accent-text)',
@@ -793,7 +815,7 @@ export default function EventDetailPage() {
                             })}
                           </div>
 
-                          {event.scoring_mode !== 'participation' && isPastDeadline && !winner && !!!challenge.vote_enabled && !!!challenge.vote_closed && challengeSubmissions.length >= 2 && (
+                          {event.scoring_mode !== 'participation' && isPastDeadline && !winner && !challenge.vote_enabled && !challenge.vote_closed && challengeSubmissions.length >= 2 && (
                             <div style={{ marginTop: 8 }}>
                               <button onClick={() => enableVote(challenge.id)} style={{
                                 padding: '6px 16px', borderRadius: 50,
@@ -805,7 +827,7 @@ export default function EventDetailPage() {
                             </div>
                           )}
 
-                          {event.scoring_mode !== 'participation' && !!!!challenge.vote_enabled && !!!challenge.vote_closed && !winner && (
+                          {event.scoring_mode !== 'participation' && challenge.vote_enabled && !challenge.vote_closed && !winner && (
                             <div style={{
                               marginTop: 8, padding: '10px 14px', borderRadius: 10,
                               background: 'var(--rp-secondary-light)',
@@ -928,12 +950,10 @@ export default function EventDetailPage() {
               {/* Logo */}
               <div style={{ marginBottom: 16 }}>
                 <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--rp-text-secondary)', marginBottom: 8 }}>Logo</p>
-                {(event as any).logo_key ? (
+                {event.logo_key && event.logo_url ? (
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
                     <div style={{ width: 60, height: 60, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--rp-border)' }}>
-                      <img src={`/api-proxy-logo`} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
+                      <img src={event.logo_url} alt="Logo" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                     <button onClick={async () => {
                       try {
@@ -968,12 +988,10 @@ export default function EventDetailPage() {
               {/* Banner */}
               <div>
                 <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--rp-text-secondary)', marginBottom: 8 }}>Banniere</p>
-                {(event as any).banner_key ? (
+                {event.banner_key && event.banner_url ? (
                   <div style={{ marginBottom: 8 }}>
                     <div style={{ width: '100%', height: 80, borderRadius: 10, overflow: 'hidden', border: '1px solid var(--rp-border)', marginBottom: 6 }}>
-                      <img src={`/api-proxy-banner`} alt="Banniere" style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                        onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
-                      />
+                      <img src={event.banner_url} alt="Banniere" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     </div>
                     <button onClick={async () => {
                       try {
@@ -1116,7 +1134,7 @@ export default function EventDetailPage() {
                               <img src={sub.photo_url} alt={sub.participant_name} loading="lazy"
                                 style={{ width: '100%', height: 200, objectFit: 'cover', display: 'block' }} />
                             )}
-                            {!!!!sub.is_winner && (
+                            {sub.is_winner && (
                               <div style={{ position: 'absolute', top: 8, right: 8, background: 'var(--rp-accent)', color: 'var(--rp-accent-text)', fontSize: 10, fontWeight: 700, padding: '3px 10px', borderRadius: 50 }}>
                                 GAGNANT
                               </div>

@@ -4,6 +4,7 @@ import pool from '../config/database';
 import { validateBody } from '../middleware/validateInput';
 import { joinEventSchema } from '../utils/validators';
 import { emitToEvent } from '../config/socket';
+import { getEventLimit } from '../config/plans';
 
 const router = Router();
 
@@ -28,12 +29,12 @@ router.post('/events/:eventId/join', validateBody(joinEventSchema), async (req, 
       return;
     }
 
-    const [ownerRows] = await pool.execute(
-      'SELECT u.plan FROM users u JOIN events e ON e.user_id = u.id WHERE e.id = ?',
+    const [eventTierRows] = await pool.execute(
+      'SELECT tier FROM events WHERE id = ?',
       [eventId]
     );
-    const plan = (ownerRows as any[])[0]?.plan || 'free';
-    const limits: Record<string, number> = { free: 30, starter: 100, pro: 999999 };
+    const tier = (eventTierRows as any[])[0]?.tier || 'free';
+    const participantLimit = getEventLimit(tier, 'participants');
 
     const [participantCount] = await pool.execute(
       'SELECT COUNT(*) as count FROM participants WHERE event_id = ?',
@@ -41,8 +42,8 @@ router.post('/events/:eventId/join', validateBody(joinEventSchema), async (req, 
     );
     const count = (participantCount as any[])[0].count;
 
-    if (count >= (limits[plan] || 30)) {
-      res.status(403).json({ error: 'Nombre maximum de participants atteint' });
+    if (count >= participantLimit) {
+      res.status(403).json({ error: 'Nombre maximum de participants atteint pour cet evenement' });
       return;
     }
 

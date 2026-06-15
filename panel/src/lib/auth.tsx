@@ -10,6 +10,7 @@ interface User {
   lastName: string;
   email: string;
   plan: string;
+  eventCredits: number;
   emailVerified?: boolean;
 }
 
@@ -60,6 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         lastName: profile.lastName,
         email: profile.email,
         plan: profile.plan,
+        eventCredits: profile.eventCredits ?? 0,
         emailVerified: !!profile.emailVerified,
       };
       Cookies.set('user', JSON.stringify(fullUser), { expires: 30 });
@@ -88,6 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         lastName: profile.lastName,
         email: profile.email,
         plan: profile.plan,
+        eventCredits: profile.eventCredits ?? 0,
         emailVerified: !!profile.emailVerified,
       };
       Cookies.set('user', JSON.stringify(updatedUser), { expires: 30 });

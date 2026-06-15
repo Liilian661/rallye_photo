@@ -5,12 +5,14 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
-import { IconHome, IconCalendar, IconStar, IconSettings, IconMenu, IconX, IconMoon, IconSun, IconLogout } from '@/lib/icons';
+import { IconHome, IconCalendar, IconStar, IconSettings, IconMenu, IconX, IconMoon, IconSun, IconLogout, IconUsers } from '@/lib/icons';
 
 const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: IconHome },
-  { href: '/dashboard/events', label: 'Evenements', icon: IconCalendar },
-  { href: '/dashboard/settings', label: 'Parametres', icon: IconSettings },
+  { href: '/dashboard',             label: 'Dashboard',    icon: IconHome },
+  { href: '/dashboard/events',      label: 'Evenements',   icon: IconCalendar },
+  { href: '/dashboard/pricing',     label: 'Tarification', icon: IconStar },
+  { href: '/dashboard/affiliates',  label: 'Affiliation',  icon: IconUsers },
+  { href: '/dashboard/settings',    label: 'Parametres',   icon: IconSettings },
 ];
 
 export default function Sidebar() {

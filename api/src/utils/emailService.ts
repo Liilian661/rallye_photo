@@ -92,6 +92,116 @@ export async function sendResetPasswordEmail(email: string, firstName: string, t
   });
 }
 
+export async function sendWelcomeEmail(email: string, firstName: string): Promise<void> {
+  const panelUrl = PANEL_URL;
+  const html = baseTemplate(`
+    <h2 style="margin:0 0 8px;font-size:22px;color:#1A1A2E;">Bienvenue ${firstName} !</h2>
+    <p style="color:#6B5A8E;font-size:15px;line-height:1.6;margin:0 0 8px;">
+      Votre email est v&#233;rifi&#233;. Vous &#234;tes pr&#234;t&#8239;&#183;e &#224; organiser votre premier rallye photo.
+    </p>
+    <p style="color:#6B5A8E;font-size:14px;line-height:1.7;margin:0 0 20px;">
+      Voici comment d&#233;marrer en 3 minutes&nbsp;:
+    </p>
+    <table cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 24px;">
+      <tr>
+        <td width="32" valign="top" style="padding-top:2px;">
+          <div style="width:24px;height:24px;border-radius:50%;background:#FF2D78;color:#fff;font-size:12px;font-weight:700;text-align:center;line-height:24px;">1</div>
+        </td>
+        <td style="padding-left:10px;">
+          <p style="margin:0;font-size:14px;font-weight:600;color:#1A1A2E;">Cr&#233;ez un &#233;v&#233;nement</p>
+          <p style="margin:0;font-size:13px;color:#9B95B0;">Nom, date, deadline, mode de jeu.</p>
+        </td>
+      </tr>
+      <tr><td colspan="2" style="height:14px;"></td></tr>
+      <tr>
+        <td width="32" valign="top" style="padding-top:2px;">
+          <div style="width:24px;height:24px;border-radius:50%;background:#FF2D78;color:#fff;font-size:12px;font-weight:700;text-align:center;line-height:24px;">2</div>
+        </td>
+        <td style="padding-left:10px;">
+          <p style="margin:0;font-size:14px;font-weight:600;color:#1A1A2E;">Ajoutez des d&#233;fis photo</p>
+          <p style="margin:0;font-size:13px;color:#9B95B0;">Titre, points, mode surprise si vous le souhaitez.</p>
+        </td>
+      </tr>
+      <tr><td colspan="2" style="height:14px;"></td></tr>
+      <tr>
+        <td width="32" valign="top" style="padding-top:2px;">
+          <div style="width:24px;height:24px;border-radius:50%;background:#FF2D78;color:#fff;font-size:12px;font-weight:700;text-align:center;line-height:24px;">3</div>
+        </td>
+        <td style="padding-left:10px;">
+          <p style="margin:0;font-size:14px;font-weight:600;color:#1A1A2E;">Partagez le code &#224; vos participants</p>
+          <p style="margin:0;font-size:13px;color:#9B95B0;">QR code ou code court &#8212; ils rejoignent en 10 secondes.</p>
+        </td>
+      </tr>
+    </table>
+    <div style="text-align:center;margin:0 0 24px;">
+      <a href="${panelUrl}/dashboard/events/new" style="display:inline-block;background-color:#FF2D78;color:#ffffff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:50px;text-decoration:none;">
+        Cr&#233;er mon premier &#233;v&#233;nement
+      </a>
+    </div>
+    <p style="color:#9B95B0;font-size:12px;line-height:1.5;margin:0;text-align:center;">
+      Une question ? R&#233;pondez directement &#224; cet email, on vous r&#233;pond.
+    </p>
+  `);
+
+  await transporter.sendMail({
+    from: FROM,
+    to: email,
+    subject: `Bienvenue sur Rallye Photo, ${firstName} !`,
+    html,
+  });
+}
+
+export async function sendProCancellationEmail(
+  email: string,
+  firstName: string,
+  subscriptionEndDate: Date,
+  gracePeriodEnd: Date
+): Promise<void> {
+  const panelUrl = PANEL_URL;
+  const endStr  = subscriptionEndDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+  const graceStr = gracePeriodEnd.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+
+  const html = baseTemplate(`
+    <h2 style="margin:0 0 8px;font-size:20px;color:#1A1A2E;">Votre abonnement Pro se termine</h2>
+    <p style="color:#6B5A8E;font-size:15px;line-height:1.6;margin:0 0 24px;">
+      Bonjour ${firstName}, votre abonnement Pro a &#233;t&#233; annul&#233; et prendra fin le <strong>${endStr}</strong>.
+    </p>
+
+    <div style="background:#FFF5F8;border-left:3px solid #FF2D78;padding:14px 16px;border-radius:0 8px 8px 0;margin:0 0 20px;">
+      <p style="margin:0 0 6px;font-size:14px;font-weight:700;color:#1A1A2E;">&#128274; P&#233;riode de gr&#226;ce : 48h</p>
+      <p style="margin:0;font-size:13px;color:#6B5A8E;line-height:1.6;">
+        Jusqu&apos;au <strong>${graceStr}</strong>, vos galeries restent accessibles en lecture seule.
+        Aucune nouvelle soumission ne sera accept&#233;e apr&#232;s la fin de l&apos;abonnement.
+      </p>
+    </div>
+
+    <p style="color:#6B5A8E;font-size:14px;line-height:1.6;margin:0 0 8px;">
+      <strong>Ce qui change apr&#232;s la p&#233;riode de gr&#226;ce&nbsp;:</strong>
+    </p>
+    <ul style="color:#6B5A8E;font-size:13px;line-height:1.8;margin:0 0 20px;padding-left:20px;">
+      <li>Vos &#233;v&#233;nements passent aux limites du plan Gratuit (5 d&#233;fis, 20 participants)</li>
+      <li>L&apos;acc&#232;s aux galeries est limit&#233; &#224; 48h apr&#232;s la deadline</li>
+      <li>Le vote du public et l&apos;export ZIP ne seront plus disponibles</li>
+    </ul>
+
+    <div style="text-align:center;margin:0 0 16px;">
+      <a href="${panelUrl}/dashboard/pricing" style="display:inline-block;background-color:#FF2D78;color:#ffffff;font-weight:700;font-size:15px;padding:14px 36px;border-radius:50px;text-decoration:none;">
+        R&#233;activer mon abonnement Pro
+      </a>
+    </div>
+    <p style="color:#9B95B0;font-size:12px;text-align:center;margin:0;">
+      Vous pouvez r&#233;activer &#224; tout moment avant le ${graceStr}.
+    </p>
+  `);
+
+  await transporter.sendMail({
+    from: FROM,
+    to: email,
+    subject: 'Votre abonnement Pro Rallye Photo se termine',
+    html,
+  });
+}
+
 export async function testConnection(): Promise<boolean> {
   try {
     await transporter.verify();

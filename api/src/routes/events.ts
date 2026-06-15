@@ -10,8 +10,9 @@ import { validateBody } from '../middleware/validateInput';
 import { createEventSchema } from '../utils/validators';
 import { generateUniqueEventCode } from '../utils/codeGenerator';
 import { emitToEvent } from '../config/socket';
+import { resolveEventTier, getEventLimit, USER_PLANS } from '../config/plans';
 import { generateEventPhotoSecret } from '../utils/photoToken';
-import { getS3Client, getS3Config, uploadToS3 } from '../utils/s3Service';
+import { getS3Client, getS3Config, uploadToS3, deleteFromS3 } from '../utils/s3Service';
 import multer from 'multer';
 import sharp from 'sharp';
 import { signPhotoToken } from '../utils/photoToken';
@@ -22,7 +23,7 @@ const router = Router();
 router.get('/', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const [rows] = await pool.execute(
-      'SELECT id, name, description, event_date, deadline, code, qr_code_url, gallery_enabled, gallery_locked, scoring_mode, team_mode, theme_color, logo_key, banner_key, status, created_at FROM events WHERE user_id = ? ORDER BY created_at DESC',
+      'SELECT id, name, description, event_date, deadline, code, qr_code_url, gallery_enabled, gallery_locked, scoring_mode, team_mode, theme_color, logo_key, banner_key, status, tier, created_at FROM events WHERE user_id = ? ORDER BY created_at DESC',
       [req.user!.userId]
     );
     res.json(rows);
@@ -38,19 +39,42 @@ router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthR
     const { name, description, eventDate, deadline, scoringMode, teamMode } = req.body;
     const userId = req.user!.userId;
 
-    const [existingEvents] = await pool.execute(
-      'SELECT COUNT(*) as count FROM events WHERE user_id = ?',
+    const [userRows] = await pool.execute(
+      'SELECT plan, event_credits, email_verified FROM users WHERE id = ?',
       [userId]
     );
-    const eventCount = (existingEvents as any[])[0].count;
+    const user = (userRows as any[])[0];
 
-    const [userRows] = await pool.execute('SELECT plan FROM users WHERE id = ?', [userId]);
-    const plan = (userRows as any[])[0]?.plan || 'free';
-
-    const limits: Record<string, number> = { free: 1, starter: 5, pro: 999999 };
-    if (eventCount >= (limits[plan] || 1)) {
-      res.status(403).json({ error: 'Limite evenements atteinte pour le plan ' + plan });
+    if (!user?.email_verified) {
+      res.status(403).json({
+        error: 'Vous devez vérifier votre email avant de créer un événement.',
+        code: 'EMAIL_NOT_VERIFIED',
+      });
       return;
+    }
+
+    const plan = user?.plan || 'free';
+    const credits = user?.event_credits || 0;
+
+    // Déterminer le tier du nouvel événement
+    const tier = resolveEventTier(plan, credits);
+
+    // Pour les events gratuits : vérifier la limite d'events free actifs
+    if (tier === 'free') {
+      const maxFreeEvents = plan === 'pro' ? -1 : USER_PLANS.free.maxFreeEvents;
+      if (maxFreeEvents !== -1) {
+        const [existingFree] = await pool.execute(
+          "SELECT COUNT(*) as count FROM events WHERE user_id = ? AND tier = 'free'",
+          [userId]
+        );
+        if ((existingFree as any[])[0].count >= maxFreeEvents) {
+          res.status(403).json({
+            error: 'Vous avez atteint la limite d\'evenements gratuits. Achetez un credit Event ou passez au Pro.',
+            code: 'FREE_LIMIT_REACHED',
+          });
+          return;
+        }
+      }
     }
 
     const id = uuidv4();
@@ -60,13 +84,22 @@ router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthR
     const qrCodeDataUrl = await QRCode.toDataURL(joinUrl, { width: 400, margin: 2 });
 
     await pool.execute(
-      "INSERT INTO events (id, user_id, name, description, event_date, deadline, code, qr_code_url, scoring_mode, team_mode, photo_secret, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active')",
-      [id, userId, name, description || null, eventDate || null, deadline || null, code, qrCodeDataUrl, scoringMode || 'winner', teamMode ? 1 : 0, photoSecret]
+      "INSERT INTO events (id, user_id, name, description, event_date, deadline, code, qr_code_url, scoring_mode, team_mode, photo_secret, status, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+      [id, userId, name, description || null, eventDate || null, deadline || null, code, qrCodeDataUrl, scoringMode || 'winner', teamMode ? 1 : 0, photoSecret, tier]
     );
 
+    // Consommer 1 crédit si l'event est premium
+    if (tier === 'premium') {
+      await pool.execute(
+        'UPDATE users SET event_credits = event_credits - 1 WHERE id = ? AND event_credits > 0',
+        [userId]
+      );
+    }
+
     res.status(201).json({
-      id, name, description, eventDate, deadline, code, scoringMode: scoringMode || 'winner',
-      qrCodeUrl: qrCodeDataUrl, status: 'active',
+      id, name, description, eventDate, deadline, code,
+      scoringMode: scoringMode || 'winner',
+      qrCodeUrl: qrCodeDataUrl, status: 'active', tier,
     });
   } catch (error) {
     console.error('Create event error:', error);
@@ -80,7 +113,7 @@ router.get('/join/:code', async (req, res: Response): Promise<void> => {
     const { code } = req.params;
 
     const [rows] = await pool.execute(
-      'SELECT id, name, description, event_date, deadline, code, gallery_enabled, team_mode, theme_color, logo_key, banner_key, photo_secret, status FROM events WHERE code = ?',
+      'SELECT id, name, description, event_date, deadline, code, gallery_enabled, team_mode, theme_color, logo_key, banner_key, photo_secret, status, tier FROM events WHERE code = ?',
       [code.toUpperCase()]
     );
     const events = rows as any[];
@@ -102,6 +135,7 @@ router.get('/join/:code', async (req, res: Response): Promise<void> => {
       eventDate: event.event_date, deadline: event.deadline, code: event.code,
       galleryEnabled: event.gallery_enabled, team_mode: event.team_mode,
       theme_color: event.theme_color,
+      tier: event.tier || 'free',
       logo_url: event.logo_key && event.photo_secret
         ? (process.env.API_URL || 'https://api.rallye-photo.com') + '/photos/' + signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
         : null,
@@ -130,7 +164,20 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
       return;
     }
 
-    res.json(events[0]);
+    const event = events[0];
+    const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
+
+    const result = {
+      ...event,
+      logo_url: event.logo_key && event.photo_secret
+        ? apiBase + '/photos/' + signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
+        : null,
+      banner_url: event.banner_key && event.photo_secret
+        ? apiBase + '/photos/' + signPhotoToken(event.banner_key, event.id, event.photo_secret, 86400)
+        : null,
+    };
+
+    res.json(result);
   } catch (error) {
     console.error('Get event error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -176,11 +223,34 @@ router.patch('/:id', requireAuth, async (req: AuthRequest, res: Response): Promi
 // DELETE /events/:id
 router.delete('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    // TODO: Delete S3 photos for this event
-    await pool.execute(
-      'DELETE FROM events WHERE id = ? AND user_id = ?',
-      [req.params.id, req.user!.userId]
+    const eventId = req.params.id;
+
+    // Verify ownership and collect S3 keys before deleting
+    const [eventRows] = await pool.execute(
+      'SELECT id, logo_key, banner_key FROM events WHERE id = ? AND user_id = ?',
+      [eventId, req.user!.userId]
     );
+    if ((eventRows as any[]).length === 0) {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
+    const event = (eventRows as any[])[0];
+
+    const [subRows] = await pool.execute(
+      'SELECT photo_key FROM submissions WHERE event_id = ? AND photo_key IS NOT NULL',
+      [eventId]
+    );
+    const s3Keys: string[] = (subRows as any[]).map((s: any) => s.photo_key);
+    if (event.logo_key) s3Keys.push(event.logo_key);
+    if (event.banner_key) s3Keys.push(event.banner_key);
+
+    await pool.execute('DELETE FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
+
+    // Delete S3 files after DB cleanup (non-blocking, errors logged)
+    if (s3Keys.length > 0) {
+      Promise.all(s3Keys.map(key => deleteFromS3(key).catch(err => console.error('S3 delete error for', key, err)))).catch(() => {});
+    }
+
     res.json({ message: 'Evenement supprime' });
   } catch (error) {
     console.error('Delete event error:', error);

@@ -1,47 +1,68 @@
-export const PLANS = {
+// Limites par TIER d'événement (free / premium / pro)
+export const EVENT_TIER_LIMITS = {
   free: {
-    name: 'Free',
-    price: 0,
-    events: 1,
-    challengesPerEvent: 2,
-    participantsPerEvent: 30,
-    galleryDays: 1,
+    challenges: 5,
+    participants: 20,
+    galleryDays: 2,
+    publicVote: false,
     surpriseChallenges: false,
-    publicVote: false,
-    galleryDownload: false,
-    support: 'email',
+    branding: false,
+    exportZip: false,
   },
-  starter: {
-    name: 'Starter',
-    price: 9,
-    events: 5,
-    challengesPerEvent: 10,
-    participantsPerEvent: 100,
-    galleryDays: 7,
+  premium: {
+    challenges: -1,   // illimité
+    participants: 150,
+    galleryDays: 60,
+    publicVote: true,
     surpriseChallenges: true,
-    publicVote: false,
-    galleryDownload: true,
-    support: 'email',
+    branding: true,
+    exportZip: true,
   },
   pro: {
-    name: 'Pro',
-    price: 29,
-    events: -1, // unlimited
-    challengesPerEvent: -1,
-    participantsPerEvent: -1,
-    galleryDays: 30,
-    surpriseChallenges: true,
+    challenges: -1,
+    participants: -1, // illimité
+    galleryDays: 365,
     publicVote: true,
-    galleryDownload: true,
-    support: 'priority',
+    surpriseChallenges: true,
+    branding: true,
+    exportZip: true,
   },
 } as const;
 
-export type PlanName = keyof typeof PLANS;
+export type EventTier = keyof typeof EVENT_TIER_LIMITS;
 
-export function getPlanLimit(plan: string, key: 'events' | 'challengesPerEvent' | 'participantsPerEvent'): number {
-  const p = PLANS[plan as PlanName];
-  if (!p) return PLANS.free[key];
-  const val = p[key];
+// Plans utilisateur (subscription)
+export const USER_PLANS = {
+  free: {
+    name: 'Gratuit',
+    maxFreeEvents: 1,   // nombre max d'events tier=free simultanés
+    price: 0,
+  },
+  pro: {
+    name: 'Pro',
+    maxFreeEvents: -1,  // illimité
+    price: 24,
+  },
+} as const;
+
+// Prix d'un crédit événement premium (achat unique)
+export const EVENT_CREDIT_PRICE = 12;
+
+/**
+ * Retourne la limite pour un tier donné.
+ * -1 en valeur interne → renvoie 999999 (illimité côté code)
+ */
+export function getEventLimit(tier: string, key: 'challenges' | 'participants'): number {
+  const t = EVENT_TIER_LIMITS[tier as EventTier] ?? EVENT_TIER_LIMITS.free;
+  const val = t[key];
   return val === -1 ? 999999 : val;
+}
+
+/**
+ * Détermine le tier d'un nouvel événement selon le plan et les crédits de l'utilisateur.
+ */
+export function resolveEventTier(plan: string, eventCredits: number): EventTier {
+  if (plan === 'pro') return 'pro';
+  if (eventCredits > 0) return 'premium';
+  return 'free';
 }

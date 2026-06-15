@@ -108,8 +108,8 @@ router.patch('/users/:id', async (req: AuthRequest, res: Response): Promise<void
     const { plan, is_admin } = req.body;
 
     if (plan) {
-      if (!['free', 'starter', 'pro'].includes(plan)) {
-        res.status(400).json({ error: 'Plan invalide' });
+      if (!['free', 'pro'].includes(plan)) {
+        res.status(400).json({ error: 'Plan invalide (free ou pro)' });
         return;
       }
       await pool.execute('UPDATE users SET plan = ? WHERE id = ?', [plan, id]);
@@ -438,6 +438,62 @@ router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): 
     if (!res.headersSent) {
       res.status(500).json({ error: 'Erreur serveur' });
     }
+  }
+});
+
+// GET /admin/audit-logs
+router.get('/audit-logs', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const limit  = Math.min(parseInt(req.query.limit  as string || '50',  10), 200);
+    const offset = Math.max(parseInt(req.query.offset as string || '0',   10), 0);
+    const userId = req.query.userId as string || '';
+    const action = req.query.action as string || '';
+
+    let query = `SELECT a.id, a.user_id, a.action, a.entity_type, a.entity_id, a.details, a.ip, a.created_at,
+                        u.first_name, u.last_name, u.email
+                 FROM audit_logs a
+                 LEFT JOIN users u ON u.id = a.user_id
+                 WHERE 1=1`;
+    const params: any[] = [];
+
+    if (userId) {
+      query += ' AND a.user_id = ?';
+      params.push(userId);
+    }
+    if (action) {
+      query += ' AND a.action LIKE ?';
+      params.push('%' + action + '%');
+    }
+
+    query += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
+    params.push(limit, offset);
+
+    const [rows] = await pool.execute(query, params);
+    res.json(rows);
+  } catch (error) {
+    console.error('Admin audit logs error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// GET /admin/affiliates - Overview of referral program
+router.get('/affiliates', async (_req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const [totals] = await pool.execute(
+      `SELECT COUNT(*) as total, SUM(status='converted') as converted, SUM(status='rewarded') as rewarded FROM referrals`
+    );
+    const [topReferrers] = await pool.execute(
+      `SELECT u.id, u.first_name, u.last_name, u.email, COUNT(r.id) as referred_count
+       FROM referrals r
+       JOIN users u ON u.id = r.referrer_id
+       GROUP BY r.referrer_id
+       ORDER BY referred_count DESC
+       LIMIT 10`
+    );
+    res.json({ totals: (totals as any[])[0], topReferrers });
+  } catch (error) {
+    console.error('Admin affiliates error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
   }
 });
 

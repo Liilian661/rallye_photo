@@ -7,6 +7,7 @@ import { getParticipant } from '@/lib/participant';
 import { IconCamera, IconCheckCircle, IconLock, IconClock, IconAlarm, IconLoader, IconGallery, IconCheck, IconX } from '@/lib/icons';
 import CameraModal from '@/components/CameraModal';
 import { io, Socket } from 'socket.io-client';
+import { enqueueUpload, getPendingUploads, removeFromQueue, restoreFile, getQueueSize } from '@/lib/offlineQueue';
 
 interface EventInfo {
   id: string;
@@ -14,6 +15,7 @@ interface EventInfo {
   deadline: string;
   code: string;
   status: string;
+  tier?: string;
   theme_color?: string;
   logo_url?: string;
   banner_url?: string;
@@ -106,6 +108,7 @@ export default function EventPage() {
   const [alertChallenges, setAlertChallenges] = useState<{title: string; points: number}[] | null>(null);
   const [cameraForChallenge, setCameraForChallenge] = useState<string | null>(null);
   const [onlineCount, setOnlineCount] = useState(0);
+  const [pendingQueueSize, setPendingQueueSize] = useState(0);
 
   useEffect(() => {
     const p = getParticipant(eventId);
@@ -236,16 +239,67 @@ export default function EventPage() {
     };
   }, [eventId, loadData, loadVotes]);
 
+  const processOfflineQueue = useCallback(async () => {
+    const pending = await getPendingUploads();
+    if (pending.length === 0) return;
+
+    for (const item of pending) {
+      if (!navigator.onLine) break;
+      try {
+        const file = restoreFile(item);
+        const isVideoFile = file.type.startsWith('video/');
+        const fileToUpload = isVideoFile ? file : await compressImage(file);
+        const formData = new FormData();
+        formData.append('photo', fileToUpload, fileToUpload.name);
+        formData.append('participantId', item.participantId);
+        await api.post(
+          `/events/${item.eventId}/challenges/${item.challengeId}/submit`,
+          formData,
+          { headers: { 'Content-Type': 'multipart/form-data' }, timeout: isVideoFile ? 120000 : 60000 }
+        );
+        await removeFromQueue(item.id);
+      } catch {
+        // Leave in queue, will retry on next online event
+      }
+    }
+    const remaining = await getQueueSize();
+    setPendingQueueSize(remaining);
+    if (remaining === 0) loadData();
+  }, [loadData, eventId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Process offline queue when coming back online
+  useEffect(() => {
+    const handleOnline = () => processOfflineQueue();
+    window.addEventListener('online', handleOnline);
+    // Check on mount in case there are pending items
+    getQueueSize().then(setPendingQueueSize);
+    if (navigator.onLine) processOfflineQueue();
+    return () => window.removeEventListener('online', handleOnline);
+  }, [processOfflineQueue]);
+
   const handleUpload = async (challengeId: string, file: File, attempt = 1) => {
     const MAX_RETRIES = 3;
     if (!participantId) return;
+
+    // Queue for later if offline
+    if (!navigator.onLine) {
+      try {
+        await enqueueUpload(eventId, challengeId, participantId, file);
+        const size = await getQueueSize();
+        setPendingQueueSize(size);
+        alert('Pas de connexion. La photo sera envoyee automatiquement quand vous serez en ligne.');
+      } catch {
+        alert('Impossible de mettre en attente. Verifiez votre connexion.');
+      }
+      return;
+    }
+
     setUploadingChallengeId(challengeId);
 
     const isVideoFile = file.type.startsWith('video/');
     setUploadProgress(attempt > 1 ? `Nouvel essai (${attempt}/${MAX_RETRIES})...` : isVideoFile ? 'Envoi de la video...' : 'Compression...');
 
     try {
-      // Pas de compression pour les videos
       const fileToUpload = isVideoFile ? file : await compressImage(file);
       setUploadProgress(attempt > 1 ? `Envoi (essai ${attempt})...` : 'Envoi...');
 
@@ -271,6 +325,20 @@ export default function EventPage() {
         setUploadProgress(`Erreur, nouvel essai dans ${attempt}s...`);
         await new Promise(r => setTimeout(r, 1000 * attempt));
         return handleUpload(challengeId, file, attempt + 1);
+      }
+      // If all retries fail and we're now offline, queue it
+      if (!navigator.onLine) {
+        try {
+          await enqueueUpload(eventId, challengeId, participantId, file);
+          const size = await getQueueSize();
+          setPendingQueueSize(size);
+          alert('Connexion perdue. La photo sera envoyee automatiquement quand vous serez en ligne.');
+        } catch {
+          alert('Erreur lors de la mise en attente hors-ligne.');
+        }
+        setUploadingChallengeId(null);
+        setUploadProgress('');
+        return;
       }
       const msg = err.response?.data?.error
         || (err.code === 'ECONNABORTED' ? 'Temps depasse. Verifiez votre connexion.' : 'Erreur lors de l\'envoi');
@@ -481,6 +549,11 @@ export default function EventPage() {
         {onlineCount > 0 && (
           <p style={{ fontSize: 12, color: 'var(--rp-text-muted)', marginTop: 8 }}>
             {onlineCount} personne{onlineCount > 1 ? 's' : ''} en ligne
+          </p>
+        )}
+        {pendingQueueSize > 0 && (
+          <p style={{ fontSize: 12, color: 'var(--rp-blue)', marginTop: 4, fontWeight: 600 }}>
+            {pendingQueueSize} photo{pendingQueueSize > 1 ? 's' : ''} en attente d&apos;envoi (hors-ligne)
           </p>
         )}
       </div>
@@ -713,6 +786,25 @@ export default function EventPage() {
           }}
           onClose={() => setCameraForChallenge(null)}
         />
+      )}
+
+      {(!event?.tier || event.tier === 'free') && (
+        <div style={{
+          textAlign: 'center',
+          padding: '20px 0 8px',
+          fontSize: 12,
+          color: 'var(--rp-text-muted)',
+        }}>
+          Propulsé par{' '}
+          <a
+            href="https://rallye-photo.com"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: 'var(--rp-pink)', fontWeight: 700, textDecoration: 'none' }}
+          >
+            rallye.photo
+          </a>
+        </div>
       )}
     </div>
   );

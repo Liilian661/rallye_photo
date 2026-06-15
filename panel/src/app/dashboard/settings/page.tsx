@@ -1,12 +1,33 @@
 'use client';
 
+import { useState, useEffect } from 'react';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
 import Link from 'next/link';
+import api from '@/lib/api';
 
 export default function SettingsPage() {
   const { user } = useAuth();
   const { theme, toggleTheme } = useTheme();
+  const [referralLink, setReferralLink] = useState('');
+  const [referralCode, setReferralCode] = useState('');
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    api.get('/affiliates/me')
+      .then(({ data }) => {
+        setReferralLink(data.referralLink);
+        setReferralCode(data.referralCode);
+      })
+      .catch(() => {});
+  }, []);
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(referralLink).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
 
   return (
     <div style={{ maxWidth: 560 }} className="fade-in">
@@ -52,6 +73,60 @@ export default function SettingsPage() {
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Referral */}
+      <div className="card" style={{ padding: '2rem', marginBottom: 16 }}>
+        <h3 style={{
+          fontFamily: 'var(--font-display)',
+          fontSize: 18,
+          fontWeight: 600,
+          marginBottom: 4,
+          color: 'var(--rp-text-primary)',
+        }}>
+          Lien d&apos;invitation
+        </h3>
+        <p style={{ fontSize: 13, color: 'var(--rp-text-muted)', marginBottom: 14 }}>
+          Partagez ce lien — vous serez récompensé dès que vos invités réalisent leur premier achat.
+        </p>
+        {referralLink ? (
+          <>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
+              <div style={{
+                flex: 1,
+                background: 'var(--rp-bg)',
+                border: '1px solid var(--rp-border)',
+                borderRadius: 8,
+                padding: '8px 12px',
+                fontSize: 12,
+                color: 'var(--rp-text-secondary)',
+                fontFamily: 'monospace',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+                whiteSpace: 'nowrap',
+              }}>
+                {referralLink}
+              </div>
+              <button
+                onClick={copyLink}
+                className={copied ? 'btn-primary' : 'btn-secondary'}
+                style={{ flexShrink: 0, padding: '8px 16px', fontSize: 12 }}
+              >
+                {copied ? '✓ Copié' : 'Copier'}
+              </button>
+            </div>
+            <p style={{ fontSize: 12, color: 'var(--rp-text-muted)' }}>
+              Code court : <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--rp-accent)' }}>{referralCode}</span>
+            </p>
+          </>
+        ) : (
+          <p style={{ fontSize: 13, color: 'var(--rp-text-muted)' }}>Chargement...</p>
+        )}
+        <Link href="/dashboard/affiliates" style={{ display: 'inline-block', marginTop: 12 }}>
+          <button className="btn-ghost" style={{ fontSize: 12, padding: '4px 0' }}>
+            Voir mes statistiques d&apos;affiliation →
+          </button>
+        </Link>
       </div>
 
       {/* Appearance */}

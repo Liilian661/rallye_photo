@@ -49,7 +49,7 @@ export default function DashboardPage() {
 
       <div className="stats-grid" style={{
         display: 'grid',
-        gridTemplateColumns: 'repeat(3, 1fr)',
+        gridTemplateColumns: 'repeat(4, 1fr)',
         gap: 12,
         marginBottom: '1.5rem',
       }}>
@@ -87,6 +87,35 @@ export default function DashboardPage() {
           }}>
             {endedEvents}
           </p>
+        </div>
+        <div className="card" style={{ cursor: 'pointer' }} onClick={() => window.location.href = '/dashboard/pricing'}>
+          <p style={{ fontSize: 13, color: 'var(--rp-text-muted)', marginBottom: 4 }}>
+            {user?.plan === 'pro' ? 'Plan' : 'Crédits'}
+          </p>
+          {user?.plan === 'pro' ? (
+            <p style={{
+              fontSize: 18,
+              fontWeight: 700,
+              fontFamily: 'var(--font-display)',
+              color: 'var(--rp-accent)',
+            }}>
+              Pro ✓
+            </p>
+          ) : (
+            <>
+              <p style={{
+                fontSize: 28,
+                fontWeight: 700,
+                fontFamily: 'var(--font-display)',
+                color: (user?.eventCredits ?? 0) > 0 ? '#f59e0b' : 'var(--rp-text-muted)',
+              }}>
+                {user?.eventCredits ?? 0}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--rp-text-muted)', marginTop: 2 }}>
+                {(user?.eventCredits ?? 0) === 0 ? 'Acheter →' : 'crédit(s) event'}
+              </p>
+            </>
+          )}
         </div>
       </div>
 

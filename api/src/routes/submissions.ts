@@ -8,6 +8,7 @@ import { emitToEvent } from '../config/socket';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service';
 import { signPhotoToken } from '../utils/photoToken';
 import { rateLimiter } from '../middleware/rateLimiter';
+import { scanBuffer } from '../utils/antivirusService';
 
 // Limiter sharp a 1 thread pour economiser la RAM
 sharp.concurrency(1);
@@ -111,7 +112,7 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
 
     // Verifier event
     const [eventRows] = await pool.execute(
-      'SELECT id, status, deadline, code, scoring_mode, photo_secret FROM events WHERE id = ?',
+      'SELECT id, status, deadline, gallery_locked_until, code, scoring_mode, photo_secret FROM events WHERE id = ?',
       [eventId]
     );
     if ((eventRows as any[]).length === 0) {
@@ -127,6 +128,15 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
 
     if (event.deadline && new Date(event.deadline) < new Date()) {
       res.status(403).json({ error: 'La deadline est depassee' });
+      return;
+    }
+
+    // Grace period Pro: gallery locked → read-only, no new submissions
+    if (event.gallery_locked_until && new Date(event.gallery_locked_until) > new Date()) {
+      res.status(403).json({
+        error: 'Cet evenement est temporairement en lecture seule (periode de grace de 48h suite a une annulation Pro)',
+        code: 'GRACE_PERIOD_LOCKED',
+      });
       return;
     }
 
@@ -151,6 +161,16 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
       return;
     }
     const participantName = (participantRows as any[])[0].name;
+
+    // Antivirus scan before any processing
+    const scanResult = await scanBuffer(req.file.buffer, req.file.originalname || 'upload');
+    if (!scanResult.clean) {
+      res.status(422).json({
+        error: `Fichier refuse : contenu malveillant detecte (${scanResult.virus})`,
+        code: 'VIRUS_DETECTED',
+      });
+      return;
+    }
 
     // Attendre un slot disponible
     await acquireUploadSlot();
@@ -307,6 +327,7 @@ router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Res
       console.error('S3 delete error (continuing):', error);
     }
     await pool.execute('DELETE FROM submissions WHERE id = ?', [req.params.id]);
+    emitToEvent(submission.event_id, 'new-submission', {});
     res.json({ message: 'Supprime' });
   } catch (error) {
     console.error('Delete submission error:', error);

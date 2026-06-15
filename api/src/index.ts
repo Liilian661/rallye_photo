@@ -13,24 +13,30 @@ import { testConnection } from './config/database';
 import { initSocketServer } from './config/socket';
 
 // Routes
-import authRoutes from './routes/auth';
-import eventRoutes from './routes/events';
-import challengeRoutes from './routes/challenges';
+import authRoutes        from './routes/auth';
+import eventRoutes       from './routes/events';
+import challengeRoutes   from './routes/challenges';
 import participantRoutes from './routes/participants';
-import submissionRoutes from './routes/submissions';
+import submissionRoutes  from './routes/submissions';
 import leaderboardRoutes from './routes/leaderboard';
-import galleryRoutes from './routes/gallery';
-import adminRoutes from './routes/admin';
-import photoRoutes from './routes/photos';
-import teamRoutes from './routes/teams';
+import galleryRoutes     from './routes/gallery';
+import adminRoutes       from './routes/admin';
+import photoRoutes       from './routes/photos';
+import teamRoutes        from './routes/teams';
+import webhookRoutes     from './routes/webhooks';
+import affiliateRoutes   from './routes/affiliates';
+import paymentRoutes     from './routes/payments';
 
-const app = express();
+const app    = express();
 const server = http.createServer(app);
-const PORT = parseInt(process.env.PORT || '3001');
+const PORT   = parseInt(process.env.PORT || '3001');
 
 // Init Socket.io
 app.use(compression());
 initSocketServer(server);
+
+// ── IMPORTANT: raw body for Stripe webhook MUST come before express.json() ──
+app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 
 // Middleware
 app.use(helmet());
@@ -45,22 +51,23 @@ app.use(cookieParser());
 
 // Health check
 app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ status: 'ok', timestamp: new Date().toISOString(), uptime: process.uptime() });
 });
 
 // Routes
-app.use('/auth', authRoutes);
-app.use('/events', galleryRoutes);  // AVANT eventRoutes: /:eventId/gallery matche avant /:id
-app.use('/events', eventRoutes);
-app.use('/', challengeRoutes);
-app.use('/', participantRoutes);
-app.use('/', submissionRoutes);
-app.use('/', leaderboardRoutes);
-app.use('/admin', adminRoutes);
-app.use('/photos', photoRoutes);
-app.use('/', teamRoutes);
-
-app.get('/health', (_req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+app.use('/auth',      authRoutes);
+app.use('/webhooks',  webhookRoutes);
+app.use('/affiliates', affiliateRoutes);
+app.use('/payments',  paymentRoutes);
+app.use('/events',    galleryRoutes);   // AVANT eventRoutes: /:eventId/gallery matche avant /:id
+app.use('/events',    eventRoutes);
+app.use('/',          challengeRoutes);
+app.use('/',          participantRoutes);
+app.use('/',          submissionRoutes);
+app.use('/',          leaderboardRoutes);
+app.use('/admin',     adminRoutes);
+app.use('/photos',    photoRoutes);
+app.use('/',          teamRoutes);
 
 // 404
 app.use((_req, res) => {
