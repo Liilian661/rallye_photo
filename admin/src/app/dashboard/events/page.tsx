@@ -24,16 +24,22 @@ interface Event {
 export default function AdminEventsPage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  // audit: INFO-031 — distinguer l'etat 'erreur reseau' de l'etat 'liste vide' (ne plus afficher
+  // 'Aucun evenement' quand l'API a en realite echoue).
+  const [loadError, setLoadError] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
 
   const loadEvents = useCallback(async () => {
+    setLoadError(false);
     try {
-      const params: any = {};
+      // audit: INFO-034 — params type au lieu de `any`.
+      const params: Record<string, string> = {};
       if (filterStatus) params.status = filterStatus;
       const { data } = await api.get('/admin/events', { params });
       setEvents(data);
     } catch (err) {
       console.error(err);
+      setLoadError(true); // audit: INFO-031
     } finally {
       setLoading(false);
     }
@@ -79,6 +85,12 @@ export default function AdminEventsPage() {
       <div className="card" style={{ padding: 0, overflow: 'auto' }}>
         {loading ? (
           <p style={{ padding: '2rem', color: 'var(--rp-text-muted)', textAlign: 'center' }}>Chargement...</p>
+        ) : loadError ? (
+          // audit: INFO-031 — etat d'erreur explicite avec bouton Reessayer (distinct de la liste vide).
+          <div style={{ padding: '2rem', textAlign: 'center' }}>
+            <p style={{ color: 'var(--rp-danger-text)', marginBottom: 12 }}>Erreur de chargement des evenements</p>
+            <button className="btn-ghost" onClick={() => { setLoading(true); loadEvents(); }}>Reessayer</button>
+          </div>
         ) : events.length === 0 ? (
           <p style={{ padding: '2rem', color: 'var(--rp-text-muted)', textAlign: 'center' }}>Aucun evenement</p>
         ) : (
@@ -116,12 +128,14 @@ export default function AdminEventsPage() {
                     </div>
                   </td>
                   <td>
+                    {/* audit: INFO-030 — cas explicite pour 'archived' (libelle distinct de 'ended'). */}
                     <span className={`badge ${
                       e.status === 'active' ? 'badge-success' :
                       e.status === 'ended' ? 'badge-muted' :
-                      e.status === 'draft' ? 'badge-warning' : 'badge-muted'
+                      e.status === 'draft' ? 'badge-warning' :
+                      e.status === 'archived' ? 'badge-secondary' : 'badge-muted'
                     }`}>
-                      {e.status}
+                      {e.status === 'archived' ? 'Archive' : e.status}
                     </span>
                   </td>
                   <td style={{ textAlign: 'center' }}>{e.challenge_count}</td>

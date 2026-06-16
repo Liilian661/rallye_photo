@@ -250,8 +250,11 @@ export default function AffiliatesPage() {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {data.referrals.map((r, i) => {
               const st = STATUS_LABELS[r.status] ?? STATUS_LABELS.pending;
+              // audit: LOW-068 — cle stable (created_at + nom) plutot que l'index, pour eviter
+              // des reconciliations React incorrectes quand l'ordre change (referral converti remonte).
+              const key = `${r.created_at}-${r.first_name}-${r.last_name}-${i}`;
               return (
-                <div key={i} style={{
+                <div key={key} style={{
                   display: 'flex',
                   justifyContent: 'space-between',
                   alignItems: 'center',

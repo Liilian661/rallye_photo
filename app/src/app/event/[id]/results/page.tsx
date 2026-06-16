@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import api from '@/lib/api';
 import { getParticipant } from '@/lib/participant';
@@ -23,12 +23,12 @@ interface Submission {
   is_winner: boolean;
 }
 
+// audit: INFO-018 — suppression du champ mort justRevealed (jamais lu)
 interface RevealedWinner {
   challengeTitle: string;
   winnerName: string;
   points: number;
   isMe: boolean;
-  justRevealed?: boolean;
 }
 
 export default function ResultsPage() {
@@ -40,9 +40,18 @@ export default function ResultsPage() {
   const [participantId, setParticipantId] = useState('');
   const [newReveal, setNewReveal] = useState<RevealedWinner | null>(null);
 
+  // audit: LOW-067 — refs stables pour decoupler le useEffect socket de
+  // participantId / loadResults : la connexion ne doit pas se reconstruire
+  // a chaque changement de participantId (qui passe de '' a sa vraie valeur).
+  const participantIdRef = useRef('');
+  const loadResultsRef = useRef<() => void>(() => {});
+
   useEffect(() => {
     const p = getParticipant(eventId);
-    if (p) setParticipantId(p.id);
+    if (p) {
+      setParticipantId(p.id);
+      participantIdRef.current = p.id;
+    }
   }, [eventId]);
 
   const loadResults = useCallback(async () => {
@@ -80,14 +89,26 @@ export default function ResultsPage() {
     }
   }, [eventId, participantId]);
 
+  // audit: LOW-067 — garder la derniere version de loadResults dans une ref
+  // pour que le useEffect socket (stable sur [eventId]) appelle toujours la
+  // closure courante sans se re-souscrire.
+  useEffect(() => {
+    loadResultsRef.current = loadResults;
+  }, [loadResults]);
+
   useEffect(() => {
     if (participantId) loadResults();
   }, [participantId, loadResults]);
 
   // WebSocket for live reveal
   useEffect(() => {
+    // audit: MED-013 — envoyer le token participant au handshake socket si
+    // disponible (mode degrade cote serveur si absent). Le champ participantToken
+    // est pose par le flux de join (cf unite participant).
+    const participant = getParticipant(eventId) as ({ participantToken?: string } | null);
     const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
       transports: ['websocket', 'polling'],
+      auth: participant?.participantToken ? { token: participant.participantToken } : undefined,
     });
 
     socket.on('connect', () => {
@@ -97,25 +118,28 @@ export default function ResultsPage() {
     socket.on('winner-revealed', (data: any) => {
       const revealed: RevealedWinner = {
         challengeTitle: data.challengeTitle || 'Défi',
-        winnerName: data.winnerName || '???',
+        // audit: INFO-018 — harmonisation du fallback : pas de winnerName affichable -> nom neutre
+        winnerName: data.winnerName || 'Gagnant',
         points: data.points || 0,
-        isMe: data.participantId === participantId,
-        justRevealed: true,
+        // audit: LOW-067 — lire participantId via ref (connexion stable)
+        isMe: data.participantId === participantIdRef.current,
       };
       setNewReveal(revealed);
       setTimeout(() => {
         setNewReveal(null);
-        loadResults();
+        loadResultsRef.current();
       }, 5000);
     });
 
-    socket.on('winner-selected', () => loadResults());
+    socket.on('winner-selected', () => loadResultsRef.current());
 
     return () => {
       socket.emit('leave-event', eventId);
       socket.disconnect();
     };
-  }, [eventId, participantId, loadResults]);
+    // audit: LOW-067 — dependances reduites a [eventId] : plus de
+    // reconnexion a chaque changement de participantId / loadResults.
+  }, [eventId]);
 
   return (
     <div className="page-container page-with-nav fade-in">
@@ -196,9 +220,11 @@ export default function ResultsPage() {
         </div>
       ) : (
         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {winners.map((winner, i) => (
+          {winners.map((winner) => (
             <div
-              key={i}
+              // audit: LOW-068 — cle stable (titre du defi) au lieu de l'index,
+              // pour eviter les reconciliations incorrectes lors des reveals live.
+              key={winner.challengeTitle}
               className="card"
               style={{
                 borderColor: winner.isMe ? 'var(--rp-pink)' : 'var(--rp-border)',

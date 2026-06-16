@@ -88,6 +88,14 @@ export default function EventPage() {
   const eventId = params.id as string;
   const socketRef = useRef<Socket | null>(null);
 
+  // audit: CRIT-001 — entetes Authorization derivees du token participant signe.
+  // Si le token manque (ancien localStorage), le backend repond 401 et l'utilisateur
+  // rejoint a nouveau ; on n'ajoute pas d'entete vide.
+  const authHeaders = useCallback((): Record<string, string> => {
+    const token = getParticipant(eventId)?.participantToken;
+    return token ? { Authorization: 'Bearer ' + token } : {};
+  }, [eventId]);
+
   const [event, setEvent] = useState<EventInfo | null>(null);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -167,14 +175,19 @@ export default function EventPage() {
     for (const c of challenges) {
       if (c.vote_enabled) {
         try {
-          const { data } = await api.get(`/challenges/${c.id}/votes`);
+          // audit: LOW-025 — la lecture des votes exige desormais le token participant
+          const { data } = await api.get(`/challenges/${c.id}/votes`, { headers: authHeaders() });
           const counts: Record<string, number> = {};
           for (const v of data.votes) { counts[v.submission_id] = v.vote_count; }
           setVoteCounts(prev => ({ ...prev, [c.id]: counts }));
+          // audit: LOW-059 — restaurer le vote deja emis par ce participant apres reload
+          if (data.myVote) {
+            setVotedChallenges(prev => (prev[c.id] ? prev : { ...prev, [c.id]: data.myVote }));
+          }
         } catch { /* ignore */ }
       }
     }
-  }, [challenges]);
+  }, [challenges, authHeaders]);
 
   useEffect(() => {
     if (challenges.length > 0) loadVotes();
@@ -252,11 +265,16 @@ export default function EventPage() {
         const fileToUpload = isVideoFile ? file : await compressImage(file);
         const formData = new FormData();
         formData.append('photo', fileToUpload, fileToUpload.name);
-        formData.append('participantId', item.participantId);
+        // audit: CRIT-001 — Bearer token participant ; ne pas forcer Content-Type
+        // (axios gere le boundary multipart). Le token est lu depuis l'event cible.
+        const queueToken = getParticipant(item.eventId)?.participantToken;
         await api.post(
           `/events/${item.eventId}/challenges/${item.challengeId}/submit`,
           formData,
-          { headers: { 'Content-Type': 'multipart/form-data' }, timeout: isVideoFile ? 120000 : 60000 }
+          {
+            headers: queueToken ? { Authorization: 'Bearer ' + queueToken } : {},
+            timeout: isVideoFile ? 120000 : 60000,
+          }
         );
         await removeFromQueue(item.id);
       } catch {
@@ -281,6 +299,27 @@ export default function EventPage() {
   const handleUpload = async (challengeId: string, file: File, attempt = 1) => {
     const MAX_RETRIES = 3;
     if (!participantId) return;
+
+    // audit: LOW-062 / INFO-021 — validations cote client (le serveur reste la verite).
+    // Verifiees uniquement au 1er essai (pas lors des retries automatiques).
+    if (attempt === 1) {
+      // audit: INFO-021 — empecher une 2e soumission au meme defi (double-clic / course UI)
+      if (hasSubmitted(challengeId)) {
+        alert('Vous avez deja soumis une photo pour ce defi.');
+        return;
+      }
+      // audit: LOW-062 — borne de taille (50MB, aligne sur la limite serveur)
+      const MAX_FILE_SIZE = 50 * 1024 * 1024;
+      if (file.size > MAX_FILE_SIZE) {
+        alert('Fichier trop volumineux (max 50 Mo).');
+        return;
+      }
+      // audit: LOW-062 — type MIME image/video uniquement
+      if (!file.type.startsWith('image/') && !file.type.startsWith('video/')) {
+        alert('Format de fichier non supporte (image ou video uniquement).');
+        return;
+      }
+    }
 
     // Queue for later if offline
     if (!navigator.onLine) {
@@ -307,13 +346,14 @@ export default function EventPage() {
 
       const formData = new FormData();
       formData.append('photo', fileToUpload, fileToUpload.name || (isVideoFile ? 'video.webm' : 'photo.jpg'));
-      formData.append('participantId', participantId);
 
       await api.post(
         `/events/${eventId}/challenges/${challengeId}/submit`,
         formData,
         {
-          headers: { 'Content-Type': 'multipart/form-data' },
+          // audit: CRIT-001 — Bearer token participant ; pas de Content-Type force
+          // (axios gere le boundary multipart).
+          headers: authHeaders(),
           timeout: isVideoFile ? 120000 : 60000,
           onUploadProgress: (progressEvent: any) => {
             if (progressEvent.total) {
@@ -374,7 +414,8 @@ export default function EventPage() {
 
   const castVote = async (challengeId: string, submissionId: string) => {
     try {
-      await api.post(`/challenges/${challengeId}/vote`, { participantId, submissionId });
+      // audit: HIGH-008 — participantId derive du token cote serveur ; on envoie le Bearer.
+      await api.post(`/challenges/${challengeId}/vote`, { submissionId }, { headers: authHeaders() });
       setVotedChallenges(prev => ({ ...prev, [challengeId]: submissionId }));
       await loadVotes();
     } catch (err: any) {
@@ -399,7 +440,8 @@ export default function EventPage() {
     if (!confirm('Supprimer cette photo ?')) return;
     setDeletingId(submissionId);
     try {
-      await api.delete('/submissions/' + submissionId + '/participant/' + participantId);
+      // audit: HIGH-010 — plus de participantId dans l'URL ; identite derivee du token (Bearer).
+      await api.delete('/submissions/' + submissionId + '/participant', { headers: authHeaders() });
       await loadData();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur lors de la suppression');
@@ -494,8 +536,9 @@ export default function EventPage() {
             </p>
 
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
-              {alertChallenges.map((c, i) => (
-                <div key={i} style={{
+              {/* audit: LOW-068 — cle stable (titre+points) plutot que l'index */}
+              {alertChallenges.map((c) => (
+                <div key={`${c.title}-${c.points}`} style={{
                   display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                   padding: '10px 14px', borderRadius: 10,
                   background: 'var(--rp-pink-light, #fff0f6)',

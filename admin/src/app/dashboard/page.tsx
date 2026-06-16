@@ -4,6 +4,23 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 
+// audit: INFO-034 — typer recentUsers/recentEvents au lieu de `any[]`.
+interface RecentUser {
+  id: string;
+  first_name: string;
+  last_name: string;
+  email: string;
+  plan: string;
+}
+
+interface RecentEvent {
+  id: string;
+  name: string;
+  status: string;
+  first_name: string;
+  last_name: string;
+}
+
 interface Stats {
   totals: {
     users: number;
@@ -15,8 +32,8 @@ interface Stats {
     endedEvents: number;
   };
   planCounts: { plan: string; count: number }[];
-  recentUsers: any[];
-  recentEvents: any[];
+  recentUsers: RecentUser[];
+  recentEvents: RecentEvent[];
 }
 
 export default function AdminDashboardPage() {
@@ -50,8 +67,9 @@ export default function AdminDashboardPage() {
 
       {/* Stats grid */}
       <div className="stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, marginBottom: 24 }}>
-        {statCards.map((s, i) => (
-          <div key={i} className="card" style={{ padding: '1rem' }}>
+        {/* audit: LOW-068 — cle React stable (label) plutot que l'index, pour une reconciliation correcte. */}
+        {statCards.map((s) => (
+          <div key={s.label} className="card" style={{ padding: '1rem' }}>
             <p style={{ fontSize: 12, color: 'var(--rp-text-muted)', marginBottom: 4 }}>{s.label}</p>
             <p style={{ fontSize: 26, fontWeight: 700, fontFamily: 'var(--font-display)', color: s.color }}>{s.value}</p>
           </div>

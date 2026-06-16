@@ -34,22 +34,12 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     setTheme(prev => prev === 'dark' ? 'light' : 'dark');
   };
 
-  // Prevent flash of wrong theme
-  if (!mounted) {
-    return (
-      <script
-        dangerouslySetInnerHTML={{
-          __html: `
-            (function() {
-              var t = localStorage.getItem('rp-theme') || 'dark';
-              document.documentElement.setAttribute('data-theme', t);
-            })();
-          `,
-        }}
-      />
-    );
-  }
-
+  // audit: MED-023 — toujours rendre {children}, y compris pendant le SSR / premier rendu client,
+  // pour que le HTML initial contienne le contenu applicatif (SEO/perf, pas de page blanche).
+  // audit: INFO-032 — l'anti-flash de theme est gere UNIQUEMENT par le script inline du <head>
+  // (layout.tsx) ; on ne duplique plus de <script> ici.
+  // `mounted` evite seulement un mismatch d'hydratation sur la valeur du contexte tant que le
+  // theme persiste n'est pas relu cote client ; il ne conditionne plus le rendu des enfants.
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>
       {children}

@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
+import api from '@/lib/api';
 import { IconHome, IconUsers, IconCalendar, IconSettings, IconMenu, IconX, IconLogout } from '@/lib/icons';
 
 const navItems = [
@@ -17,10 +18,38 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
   const pathname = usePathname();
   const router = useRouter();
   const [open, setOpen] = useState(false);
+  // audit: HIGH-018 / LOW-082 — etat de garde : tant que l'auth n'est pas confirmee, on ne rend
+  // PAS les enfants (sinon flash de contenu admin + appels /admin/* premature avant redirection).
+  const [authState, setAuthState] = useState<'checking' | 'authorized'>('checking');
 
+  // audit: HIGH-018 — l'autorisation ne doit pas reposer sur la simple presence du cookie :
+  // on revalide isAdmin via /auth/me au montage. Un admin dont les droits ont ete retires (ou un
+  // visiteur sans token) est redirige vers /auth/login au lieu de garder l'acces UI.
+  // Note: l'enforcement reel reste cote API (chaque route /admin/* doit exiger isAdmin) — TODO backend.
   useEffect(() => {
+    let active = true;
     const token = Cookies.get('adminAccessToken');
-    if (!token) router.replace('/auth/login');
+    if (!token) {
+      router.replace('/auth/login');
+      return;
+    }
+    api.get('/auth/me')
+      .then(({ data }) => {
+        if (!active) return;
+        if (data?.isAdmin) {
+          setAuthState('authorized');
+        } else {
+          Cookies.remove('adminAccessToken');
+          Cookies.remove('adminRefreshToken');
+          Cookies.remove('adminUser');
+          router.replace('/auth/login');
+        }
+      })
+      .catch(() => {
+        // 401/echec : l'interceptor api purge + redirige deja ; on garde le loader (pas de flash).
+        if (active) router.replace('/auth/login');
+      });
+    return () => { active = false; };
   }, [router]);
 
   useEffect(() => { setOpen(false); }, [pathname]);
@@ -31,6 +60,16 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
     Cookies.remove('adminUser');
     router.push('/auth/login');
   };
+
+  // audit: HIGH-018 / LOW-082 — bloquer le rendu des enfants tant que l'auth n'est pas confirmee :
+  // un loader neutre est affiche, aucune page enfant ne se monte ni ne declenche d'appel /admin/*.
+  if (authState !== 'authorized') {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '100vh', background: 'var(--rp-bg-page)' }}>
+        <p style={{ color: 'var(--rp-text-muted)' }}>Chargement...</p>
+      </div>
+    );
+  }
 
   return (
     <div style={{ display: 'flex' }}>

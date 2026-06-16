@@ -76,7 +76,10 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
   const [isRecording, setIsRecording] = useState(false);
   const [recordingTime, setRecordingTime] = useState(0);
 
-  const startCamera = useCallback(async (facing: 'environment' | 'user') => {
+  // audit: LOW-061 — Ne demander le micro (audio) qu'en mode video. En mode
+  // photo, audio:true faisait echouer tout l'acces camera (NotAllowedError) si
+  // l'utilisateur refusait le micro. wantAudio est derive du mode courant.
+  const startCamera = useCallback(async (facing: 'environment' | 'user', wantAudio: boolean) => {
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
@@ -86,7 +89,8 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: facing, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: true,
+        // audit: LOW-061 — audio uniquement en mode video
+        audio: wantAudio,
       });
       streamRef.current = stream;
       if (videoRef.current) {
@@ -97,7 +101,10 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
     } catch (err: any) {
       console.error('Camera error:', err);
       if (err.name === 'NotAllowedError') {
-        setError('Autorisez l\'acces a la camera et au micro dans les parametres de votre navigateur');
+        // audit: LOW-061 — message adapte selon que le micro etait requis ou non
+        setError(wantAudio
+          ? 'Autorisez l\'acces a la camera et au micro dans les parametres de votre navigateur'
+          : 'Autorisez l\'acces a la camera dans les parametres de votre navigateur');
       } else if (err.name === 'NotFoundError') {
         setError('Aucune camera trouvee sur cet appareil');
       } else {
@@ -108,7 +115,8 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
   }, []);
 
   useEffect(() => {
-    startCamera(facingMode);
+    // audit: LOW-061 — demarrage en mode photo : pas d'audio
+    startCamera(facingMode, false);
     return () => {
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
       if (timerRef.current) clearInterval(timerRef.current);
@@ -119,12 +127,23 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
   const switchCamera = async () => {
     const newFacing = facingMode === 'environment' ? 'user' : 'environment';
     setFacingMode(newFacing);
-    await startCamera(newFacing);
+    // audit: LOW-061 — conserver l'audio uniquement si on est en mode video
+    await startCamera(newFacing, mode === 'video');
   };
 
-  const switchMode = (newMode: 'photo' | 'video') => {
+  const switchMode = async (newMode: 'photo' | 'video') => {
     if (newMode === mode) return;
     setMode(newMode);
+    // audit: LOW-061 — renegocier le stream au passage en video pour acquerir
+    // la piste audio (et la liberer au retour en photo). Le stream actuel n'a
+    // pas de piste audio s'il a ete ouvert en mode photo.
+    const needsAudio = newMode === 'video';
+    const hasAudio = streamRef.current
+      ? streamRef.current.getAudioTracks().length > 0
+      : false;
+    if (needsAudio !== hasAudio) {
+      await startCamera(facingMode, needsAudio);
+    }
   };
 
   const capturePhoto = () => {

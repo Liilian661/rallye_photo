@@ -50,7 +50,10 @@ export async function enqueueUpload(
   const db = await openDB();
   const fileData = await fileToBase64(file);
   const item: QueuedUpload = {
-    id: `${eventId}-${challengeId}-${Date.now()}`,
+    // audit: HIGH-014 — cle deterministe (eventId-challengeId-participantId) :
+    // put() ecrase l'entree existante, donc plusieurs tentatives pour le meme
+    // defi/participant ne creent plus de doublons de soumission.
+    id: `${eventId}-${challengeId}-${participantId}`,
     eventId,
     challengeId,
     participantId,

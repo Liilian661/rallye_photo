@@ -6,11 +6,13 @@ export const metadata: Metadata = {
   description: 'Participez au rallye photo !',
 };
 
+// audit: LOW-064 — Accessibilite (WCAG 1.4.4) : autoriser le zoom jusqu'a 5x
+// au lieu de l'interdire (suppression de userScalable:false / maximumScale:1).
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  maximumScale: 5,
+  userScalable: true,
   viewportFit: 'cover',
 };
 

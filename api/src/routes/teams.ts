@@ -12,8 +12,19 @@ router.post('/events/:eventId/teams', requireAuth, async (req: AuthRequest, res:
     const { eventId } = req.params;
     const { name, color } = req.body;
 
-    if (!name || name.trim().length === 0) {
-      res.status(400).json({ error: 'Nom requis' });
+    // audit: LOW-024 - validation du nom (longueur)
+    const trimmedName = typeof name === 'string' ? name.trim() : '';
+    if (trimmedName.length === 0 || trimmedName.length > 100) {
+      res.status(400).json({ error: 'Nom requis (1-100 caracteres)' });
+      return;
+    }
+
+    // audit: LOW-024 - validation de la couleur (hex), defaut si absente
+    const teamColor = color === undefined || color === null || color === ''
+      ? '#e91e8c'
+      : color;
+    if (!/^#[0-9a-fA-F]{6}$/.test(teamColor)) {
+      res.status(400).json({ error: 'Couleur invalide (format hex #rrggbb)' });
       return;
     }
 
@@ -27,13 +38,31 @@ router.post('/events/:eventId/teams', requireAuth, async (req: AuthRequest, res:
       return;
     }
 
+    // audit: LOW-024 - exiger team_mode active
+    const ev = (eventRows as any[])[0];
+    if (!ev.team_mode) {
+      res.status(400).json({ error: 'Le mode equipe n\'est pas active pour cet evenement' });
+      return;
+    }
+
+    // audit: LOW-024 - limite du nombre d'equipes par evenement
+    const MAX_TEAMS = 50;
+    const [teamCount] = await pool.execute(
+      'SELECT COUNT(*) as count FROM teams WHERE event_id = ?',
+      [eventId]
+    );
+    if ((teamCount as any[])[0].count >= MAX_TEAMS) {
+      res.status(403).json({ error: 'Limite du nombre d\'equipes atteinte' });
+      return;
+    }
+
     const id = uuidv4();
     await pool.execute(
       'INSERT INTO teams (id, event_id, name, color) VALUES (?, ?, ?, ?)',
-      [id, eventId, name.trim(), color || '#e91e8c']
+      [id, eventId, trimmedName, teamColor]
     );
 
-    res.status(201).json({ id, name: name.trim(), color: color || '#e91e8c' });
+    res.status(201).json({ id, name: trimmedName, color: teamColor });
   } catch (error) {
     console.error('Create team error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -44,6 +73,19 @@ router.post('/events/:eventId/teams', requireAuth, async (req: AuthRequest, res:
 router.get('/events/:eventId/teams', async (req, res: Response): Promise<void> => {
   try {
     const { eventId } = req.params;
+
+    // audit: LOW-026 - ne pas exposer les equipes d'un evenement archive/inexistant.
+    // TODO(audit:LOW-026): la liste reste publique car l'app participant n'a pas
+    // encore de token d'authentification (cf CRIT-001) ; exiger un token participant
+    // du meme event une fois l'auth participant en place pour fermer totalement l'IDOR.
+    const [evRows] = await pool.execute(
+      "SELECT status FROM events WHERE id = ?",
+      [eventId]
+    );
+    if ((evRows as any[]).length === 0 || (evRows as any[])[0].status === 'archived') {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
 
     const [rows] = await pool.execute(
       `SELECT t.id, t.name, t.color,

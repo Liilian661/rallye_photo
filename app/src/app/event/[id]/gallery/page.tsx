@@ -31,16 +31,23 @@ export default function GalleryPage() {
   const [expiredAt, setExpiredAt] = useState('');
   const [countdown, setCountdown] = useState('');
   const [selectedPhoto, setSelectedPhoto] = useState<Photo | null>(null);
+  // audit: directive (gestion d'erreur reseau) — etat d'erreur explicite au lieu
+  // d'avaler silencieusement les echecs reseau (page restait vide sans feedback).
+  const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
     const load = async () => {
       try {
+        setLoadError('');
         const { data } = await api.get('/events/' + eventId + '/gallery');
         setGallery(data);
       } catch (err: any) {
         if (err.response?.data?.code === 'GALLERY_EXPIRED') {
           setExpired(true);
           setExpiredAt(err.response.data.expiredAt || '');
+        } else {
+          // audit: directive (gestion d'erreur reseau) — afficher une erreur
+          setLoadError(err.response?.data?.error || 'Impossible de charger la galerie');
         }
       } finally {
         setLoading(false);
@@ -65,6 +72,14 @@ export default function GalleryPage() {
     const interval = setInterval(update, 60000);
     return () => clearInterval(interval);
   }, [gallery]);
+
+  // audit: directive (accessibilite) — fermeture du lightbox a la touche Echap
+  useEffect(() => {
+    if (!selectedPhoto) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setSelectedPhoto(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedPhoto]);
 
   const groupedByChallenge = gallery?.photos.reduce((acc, photo) => {
     if (!acc[photo.challenge_id]) {
@@ -96,6 +111,18 @@ export default function GalleryPage() {
           <p style={{ fontSize: 13, color: 'var(--rp-text-muted)', marginTop: 8 }}>
             {"L'organisateur peut prolonger l'acces en passant a un plan superieur."}
           </p>
+        </div>
+      </div>
+    );
+  }
+
+  // audit: directive (gestion d'erreur reseau) — etat d'erreur dedie
+  if (loadError) {
+    return (
+      <div className="page-container page-with-nav fade-in">
+        <div className="card" style={{ textAlign: 'center', padding: '2rem' }} role="alert">
+          <p style={{ fontWeight: 600, fontSize: 16, marginBottom: 8 }}>Erreur</p>
+          <p style={{ color: 'var(--rp-text-muted)', fontSize: 14 }}>{loadError}</p>
         </div>
       </div>
     );
@@ -135,6 +162,13 @@ export default function GalleryPage() {
                   <div
                     key={photo.id}
                     onClick={() => setSelectedPhoto(photo)}
+                    // audit: directive (accessibilite) — vignette activable au clavier
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Photo de ${photo.participant_name}${photo.is_winner ? ' (gagnante)' : ''}`}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setSelectedPhoto(photo); }
+                    }}
                     style={{ position: 'relative', aspectRatio: '1', borderRadius: 10, overflow: 'hidden', cursor: 'pointer', border: photo.is_winner ? '2px solid var(--rp-gold)' : '1px solid var(--rp-border)' }}
                   >
                     <img src={photo.photo_url} alt={photo.participant_name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} loading="lazy" />
@@ -154,6 +188,10 @@ export default function GalleryPage() {
       {selectedPhoto && (
         <div
           onClick={() => setSelectedPhoto(null)}
+          // audit: directive (accessibilite) — lightbox annonce comme dialog modal
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Photo de ${selectedPhoto.participant_name}`}
           style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', zIndex: 300, padding: 16 }}
         >
           <img src={selectedPhoto.photo_url} alt={selectedPhoto.participant_name} style={{ maxWidth: '100%', maxHeight: '75vh', borderRadius: 12, objectFit: 'contain' }} />

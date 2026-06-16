@@ -86,9 +86,12 @@ export default function PricingPage() {
   const wasCancelled = searchParams.get('cancelled') === '1';
 
   // Rafraîchir le profil si on revient d'un paiement réussi
+  // audit: INFO-025 — refreshUser est desormais memoise (useCallback) dans le provider,
+  // donc reference stable : on peut l'inclure dans les deps sans eslint-disable ni risque
+  // de closure perimee.
   useEffect(() => {
     if (successType) refreshUser?.();
-  }, [successType]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [successType, refreshUser]);
 
   async function startCheckout(type: 'credit' | 'pro', quantity = 1) {
     const key = type === 'credit' ? `credit-${quantity}` : 'pro';

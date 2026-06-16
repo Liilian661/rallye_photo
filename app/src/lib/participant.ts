@@ -6,6 +6,8 @@ export interface ParticipantInfo {
   eventName: string;
   teamId?: string;
   teamName?: string;
+  // audit: CRIT-001 — token participant signe par l'API (Bearer pour submit/vote/delete)
+  participantToken?: string;
 }
 
 export function getParticipant(eventId: string): ParticipantInfo | null {

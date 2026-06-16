@@ -75,8 +75,20 @@ export default function JoinPage() {
     setError('');
 
     try {
+      // audit: MED-010 — identifiant d'appareil stable (cle dediee, NON effacee par
+      // clearParticipant) pour activer le verrou anti-usurpation cote serveur sans
+      // bloquer la reconnexion legitime depuis le meme navigateur.
+      let deviceId = localStorage.getItem('rp-device-id');
+      if (!deviceId) {
+        deviceId = (typeof crypto !== 'undefined' && crypto.randomUUID)
+          ? crypto.randomUUID()
+          : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+        localStorage.setItem('rp-device-id', deviceId);
+      }
+
       const { data } = await api.post(`/events/${event.id}/join`, {
         name: name.trim(),
+        deviceId,
         teamId: selectedTeam || undefined,
       });
 
@@ -90,6 +102,9 @@ export default function JoinPage() {
         eventName: event.name,
         teamId: data.teamId || undefined,
         teamName: selectedTeamObj?.name || undefined,
+        // audit: CRIT-001 — persister le token signe renvoye par l'API
+        // (sans lui, tout submit/vote/delete renverrait 401 pour ce participant).
+        participantToken: data.participantToken,
       });
       router.push(`/event/${event.id}`);
     } catch (err: any) {

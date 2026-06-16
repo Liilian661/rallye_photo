@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, Suspense } from 'react';
+import { useState, useEffect, useRef, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import { IconLoader, IconCheckCircle, IconError } from '@/lib/icons';
@@ -9,6 +9,9 @@ function VerifyContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const token = searchParams.get('token');
+  // audit: LOW-073 — garde contre la double-execution du useEffect en StrictMode (dev),
+  // qui consommerait deux fois le token a usage unique et afficherait un faux echec.
+  const hasRunRef = useRef(false);
 
   const [status, setStatus] = useState<'loading' | 'success' | 'error'>('loading');
   const [message, setMessage] = useState('');
@@ -20,7 +23,11 @@ function VerifyContent() {
       return;
     }
 
-    api.get(`/auth/verify-email?token=${token}`)
+    if (hasRunRef.current) return; // audit: LOW-073
+    hasRunRef.current = true;
+
+    // audit: LOW-054 — encoder le token dans la query string (caracteres +,/,= possibles).
+    api.get(`/auth/verify-email?token=${encodeURIComponent(token)}`)
       .then(() => {
         setStatus('success');
         setMessage('Votre email a bien ete verifie !');

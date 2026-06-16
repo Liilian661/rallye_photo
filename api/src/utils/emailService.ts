@@ -1,14 +1,24 @@
 import nodemailer from 'nodemailer';
+import { escapeHtml } from './html'; // audit: MED-019
+
+const SMTP_PORT = parseInt(process.env.SMTP_PORT || '587');
 
 const transporter = nodemailer.createTransport({
   host: process.env.SMTP_HOST || 'smtp-relay.brevo.com',
-  port: parseInt(process.env.SMTP_PORT || '587'),
-  secure: false,
+  port: SMTP_PORT,
+  // audit: LOW-058 — deriver le mode TLS implicite du port (465 = SMTPS).
+  // Un secure:false fige cassait le handshake si SMTP_PORT=465.
+  secure: process.env.SMTP_SECURE === 'true' || SMTP_PORT === 465,
   auth: {
     user: process.env.SMTP_USER || '',
     pass: process.env.SMTP_PASS || '',
   },
 });
+
+// audit: LOW-057 — Contrat d'erreur : toutes les fonctions sendXxxEmail
+// peuvent REJETER si l'envoi SMTP echoue (SMTP indisponible, quota, auth).
+// L'appelant DOIT envelopper l'appel dans un try/catch et degrader
+// gracieusement (ex: ne pas bloquer l'inscription sur un email transitoire).
 
 const FROM = process.env.SMTP_FROM || '"Rallye Photo" <noreply@rallye-photo.com>';
 const PANEL_URL = process.env.PANEL_URL || 'https://panel.rallye-photo.com';
@@ -39,10 +49,12 @@ function baseTemplate(content: string): string {
 // ---------- SEND FUNCTIONS ----------
 
 export async function sendVerificationEmail(email: string, firstName: string, token: string): Promise<void> {
-  const verifyUrl = `${PANEL_URL}/auth/verify?token=${token}`;
+  // audit: LOW-054 — token encode pour eviter une URL malformee (+,/,=)
+  const verifyUrl = `${PANEL_URL}/auth/verify?token=${encodeURIComponent(token)}`;
+  const safeFirstName = escapeHtml(firstName); // audit: MED-019
 
   const html = baseTemplate(`
-    <h2 style="margin:0 0 8px;font-size:20px;color:#1A1A2E;">Bienvenue ${firstName} !</h2>
+    <h2 style="margin:0 0 8px;font-size:20px;color:#1A1A2E;">Bienvenue ${safeFirstName} !</h2>
     <p style="color:#6B5A8E;font-size:15px;line-height:1.6;margin:0 0 24px;">
       Merci de vous &#234;tre inscrit sur Rallye Photo. Cliquez sur le bouton ci-dessous pour v&#233;rifier votre adresse email.
     </p>
@@ -66,12 +78,14 @@ export async function sendVerificationEmail(email: string, firstName: string, to
 }
 
 export async function sendResetPasswordEmail(email: string, firstName: string, token: string): Promise<void> {
-  const resetUrl = `${PANEL_URL}/auth/reset-password?token=${token}`;
+  // audit: LOW-054 — token encode pour eviter une URL malformee (+,/,=)
+  const resetUrl = `${PANEL_URL}/auth/reset-password?token=${encodeURIComponent(token)}`;
+  const safeFirstName = escapeHtml(firstName); // audit: MED-019
 
   const html = baseTemplate(`
     <h2 style="margin:0 0 8px;font-size:20px;color:#1A1A2E;">R&#233;initialisation du mot de passe</h2>
     <p style="color:#6B5A8E;font-size:15px;line-height:1.6;margin:0 0 24px;">
-      Bonjour ${firstName}, vous avez demand&#233; &#224; r&#233;initialiser votre mot de passe. Cliquez sur le bouton ci-dessous. Ce lien expire dans 1 heure.
+      Bonjour ${safeFirstName}, vous avez demand&#233; &#224; r&#233;initialiser votre mot de passe. Cliquez sur le bouton ci-dessous. Ce lien expire dans 1 heure.
     </p>
     <div style="text-align:center;margin:0 0 24px;">
       <a href="${resetUrl}" style="display:inline-block;background-color:#FF2D78;color:#ffffff;font-weight:700;font-size:15px;padding:14px 32px;border-radius:50px;text-decoration:none;">
@@ -94,8 +108,9 @@ export async function sendResetPasswordEmail(email: string, firstName: string, t
 
 export async function sendWelcomeEmail(email: string, firstName: string): Promise<void> {
   const panelUrl = PANEL_URL;
+  const safeFirstName = escapeHtml(firstName); // audit: MED-019
   const html = baseTemplate(`
-    <h2 style="margin:0 0 8px;font-size:22px;color:#1A1A2E;">Bienvenue ${firstName} !</h2>
+    <h2 style="margin:0 0 8px;font-size:22px;color:#1A1A2E;">Bienvenue ${safeFirstName} !</h2>
     <p style="color:#6B5A8E;font-size:15px;line-height:1.6;margin:0 0 8px;">
       Votre email est v&#233;rifi&#233;. Vous &#234;tes pr&#234;t&#8239;&#183;e &#224; organiser votre premier rallye photo.
     </p>
@@ -145,8 +160,11 @@ export async function sendWelcomeEmail(email: string, firstName: string): Promis
 
   await transporter.sendMail({
     from: FROM,
+    // audit: MED-019 — firstName non echappe dans le subject : un subject
+    // d'email n'interprete pas le HTML, mais on neutralise tout caractere
+    // de controle CR/LF pour eviter l'injection d'en-tetes SMTP.
+    subject: `Bienvenue sur Rallye Photo, ${firstName.replace(/[\r\n]/g, ' ')} !`,
     to: email,
-    subject: `Bienvenue sur Rallye Photo, ${firstName} !`,
     html,
   });
 }
@@ -158,13 +176,14 @@ export async function sendProCancellationEmail(
   gracePeriodEnd: Date
 ): Promise<void> {
   const panelUrl = PANEL_URL;
+  const safeFirstName = escapeHtml(firstName); // audit: MED-019
   const endStr  = subscriptionEndDate.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
   const graceStr = gracePeriodEnd.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 
   const html = baseTemplate(`
     <h2 style="margin:0 0 8px;font-size:20px;color:#1A1A2E;">Votre abonnement Pro se termine</h2>
     <p style="color:#6B5A8E;font-size:15px;line-height:1.6;margin:0 0 24px;">
-      Bonjour ${firstName}, votre abonnement Pro a &#233;t&#233; annul&#233; et prendra fin le <strong>${endStr}</strong>.
+      Bonjour ${safeFirstName}, votre abonnement Pro a &#233;t&#233; annul&#233; et prendra fin le <strong>${endStr}</strong>.
     </p>
 
     <div style="background:#FFF5F8;border-left:3px solid #FF2D78;padding:14px 16px;border-radius:0 8px 8px 0;margin:0 0 20px;">

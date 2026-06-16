@@ -20,7 +20,8 @@ export default function EventLayout({ children }: { children: React.ReactNode })
   return (
     <div>
       {children}
-      <nav className="bottom-nav">
+      {/* audit: directive (accessibilite) — nav etiquetee + indication d'onglet courant */}
+      <nav className="bottom-nav" aria-label="Navigation principale">
         {tabs.map((tab) => {
           const isActive = pathname === tab.href;
           return (
@@ -28,6 +29,8 @@ export default function EventLayout({ children }: { children: React.ReactNode })
               key={tab.href}
               className={`nav-item ${isActive ? 'active' : ''}`}
               onClick={() => router.push(tab.href)}
+              aria-current={isActive ? 'page' : undefined}
+              aria-label={tab.label}
             >
               <tab.icon size={20} />
               <span>{tab.label}</span>

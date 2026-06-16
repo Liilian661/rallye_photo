@@ -77,17 +77,18 @@ router.patch('/me/code', requireAuth, async (req: AuthRequest, res: Response): P
       return;
     }
 
-    // Vérifier unicité
-    const [existing] = await pool.execute(
-      'SELECT id FROM users WHERE referral_code = ? AND id != ?',
-      [clean, userId]
-    );
-    if ((existing as any[]).length > 0) {
-      res.status(409).json({ error: 'Ce code est déjà utilisé, choisissez-en un autre' });
-      return;
+    // audit: MED-006 — s'appuyer sur la contrainte UNIQUE de users.referral_code
+    // (cf MIGRATION_FEATURES.sql) plutot qu'un SELECT-puis-UPDATE non atomique :
+    // tenter directement l'UPDATE et capturer ER_DUP_ENTRY pour renvoyer 409.
+    try {
+      await pool.execute('UPDATE users SET referral_code = ? WHERE id = ?', [clean, userId]);
+    } catch (err: any) {
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        res.status(409).json({ error: 'Ce code est déjà utilisé, choisissez-en un autre' });
+        return;
+      }
+      throw err;
     }
-
-    await pool.execute('UPDATE users SET referral_code = ? WHERE id = ?', [clean, userId]);
 
     res.json({ referralCode: clean });
   } catch (error) {

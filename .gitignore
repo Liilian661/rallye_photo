@@ -1,8 +1,13 @@
 node_modules/
 .next/
 dist/
-.env
-.env.local
+
+# audit: top-priorite 9 — couvrir tous les fichiers d'environnement (.env, .env.local,
+# .env.production, .env.*.local ...) pour eviter toute fuite de secrets de prod.
+# audit: LOW-091 — suppression du marqueur de heredoc « EOF » ecrit par erreur (pattern parasite).
+.env*
+# Exception : le gabarit sans secret reste versionne.
+!.env.example
+
 *.log
 .pm2/
-EOF

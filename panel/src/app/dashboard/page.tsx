@@ -14,20 +14,36 @@ interface Event {
   created_at: string;
 }
 
+// audit: LOW-078 — derive actif/termine d'une fonction unique (status ET deadline) reutilisee
+// pour les stats ET les badges, afin que les chiffres du tableau de bord soient coherents avec
+// l'affichage (un event 'active' a deadline depassee est 'Expire', pas 'Actif').
+function isEventActive(e: Event): boolean {
+  return e.status === 'active' && new Date(e.deadline).getTime() > Date.now();
+}
+
 export default function DashboardPage() {
   const { user } = useAuth();
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  // audit: INFO-031 — distinguer l'echec reseau de l'etat vide legitime.
+  const [loadError, setLoadError] = useState(false);
 
-  useEffect(() => {
+  const loadEvents = () => {
+    setLoading(true);
+    setLoadError(false);
     api.get('/events')
       .then(({ data }) => setEvents(data))
-      .catch(console.error)
+      .catch((err) => { console.error(err); setLoadError(true); })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadEvents();
   }, []);
 
-  const activeEvents = events.filter(e => e.status === 'active').length;
-  const endedEvents = events.filter(e => e.status === 'ended').length;
+  // audit: LOW-078 — stats coherentes avec les badges (status + deadline)
+  const activeEvents = events.filter(isEventActive).length;
+  const endedEvents = events.filter(e => !isEventActive(e)).length;
 
   return (
     <div className="fade-in">
@@ -88,7 +104,8 @@ export default function DashboardPage() {
             {endedEvents}
           </p>
         </div>
-        <div className="card" style={{ cursor: 'pointer' }} onClick={() => window.location.href = '/dashboard/pricing'}>
+        {/* audit: INFO-022 — navigation SPA via <Link> (au lieu de window.location.href) + focusable clavier */}
+        <Link href="/dashboard/pricing" className="card" style={{ cursor: 'pointer', display: 'block' }}>
           <p style={{ fontSize: 13, color: 'var(--rp-text-muted)', marginBottom: 4 }}>
             {user?.plan === 'pro' ? 'Plan' : 'Crédits'}
           </p>
@@ -116,7 +133,7 @@ export default function DashboardPage() {
               </p>
             </>
           )}
-        </div>
+        </Link>
       </div>
 
       <div style={{
@@ -142,6 +159,14 @@ export default function DashboardPage() {
         <p style={{ color: 'var(--rp-text-muted)', fontSize: 14, padding: '2rem 0' }}>
           Chargement...
         </p>
+      ) : loadError ? (
+        /* audit: INFO-031 — etat d'erreur distinct avec bouton Reessayer */
+        <div className="card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
+          <p style={{ fontSize: 15, color: 'var(--rp-danger-text)', marginBottom: '1rem' }}>
+            Erreur de chargement des événements.
+          </p>
+          <button className="btn-secondary" onClick={loadEvents}>Réessayer</button>
+        </div>
       ) : events.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>
           <p style={{
@@ -188,9 +213,9 @@ export default function DashboardPage() {
                     {new Date(event.deadline).toLocaleDateString('fr-FR')}
                   </p>
                 </div>
-                <span className={`badge ${event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'badge-success' : 'badge-muted'}`}
+                <span className={`badge ${isEventActive(event) ? 'badge-success' : 'badge-muted'}`}
                   style={{ flexShrink: 0, marginLeft: 8 }}>
-                  {event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'Actif' : new Date(event.deadline).getTime() <= Date.now() ? 'Expire' : event.status}
+                  {isEventActive(event) ? 'Actif' : new Date(event.deadline).getTime() <= Date.now() ? 'Expire' : event.status}
                 </span>
               </div>
             </Link>
