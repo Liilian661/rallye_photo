@@ -5,18 +5,41 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import { validateBody } from '../middleware/validateInput';
 import { createChallengeSchema } from '../utils/validators';
 import { emitToEvent } from '../config/socket';
-import { getEventLimit } from '../config/plans';
+import { getEventLimit, EVENT_TIER_LIMITS, EventTier } from '../config/plans';
 import { deleteFromS3 } from '../utils/s3Service';
+// audit: HIGH-008 / CRIT-001 — auth participant pour le vote
+import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
+// audit: HIGH-006 — detection optionnelle de l'organisateur (token user JWT)
+import { verifyAccessToken } from '../utils/crypto';
 
 const router = Router();
+
+// audit: HIGH-006 — un organisateur authentifie ET PROPRIETAIRE de l'event voit TOUS
+// les defis (y compris les surprises non revelees pour les gerer) ; un visiteur ou
+// participant ne voit que les defis non-surprise ou deja reveles.
+async function isEventOwnerRequest(req: any, eventId: string): Promise<boolean> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
+  try {
+    const decoded = verifyAccessToken(authHeader.split(' ')[1]);
+    const [rows] = await pool.execute(
+      'SELECT 1 FROM events WHERE id = ? AND user_id = ? LIMIT 1',
+      [eventId, decoded.userId]
+    );
+    return (rows as any[]).length > 0;
+  } catch {
+    return false;
+  }
+}
 
 // GET /events/:eventId/challenges
 router.get('/events/:eventId/challenges', async (req, res: Response): Promise<void> => {
   try {
-    const [rows] = await pool.execute(
-      'SELECT id, title, description, points, is_surprise, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? ORDER BY sort_order ASC, created_at ASC',
-      [req.params.eventId]
-    );
+    const ownerView = await isEventOwnerRequest(req, req.params.eventId as string);
+    const sql = ownerView
+      ? 'SELECT id, title, description, points, is_surprise, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? ORDER BY sort_order ASC, created_at ASC'
+      : 'SELECT id, title, description, points, is_surprise, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? AND (is_surprise = 0 OR notified = 1) ORDER BY sort_order ASC, created_at ASC';
+    const [rows] = await pool.execute(sql, [req.params.eventId]);
     res.json(rows);
   } catch (error) {
     console.error('List challenges error:', error);
@@ -41,6 +64,11 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
 
     const tier = (eventRows as any[])[0]?.tier || 'free';
 
+    // audit: LOW-029 — defis surprise reserves aux tiers premium/pro.
+    // Si le tier ne l'autorise pas, on force isSurprise=false plutot que de rejeter.
+    const surpriseAllowed = (EVENT_TIER_LIMITS[tier as EventTier] ?? EVENT_TIER_LIMITS.free).surpriseChallenges;
+    const effectiveIsSurprise = surpriseAllowed ? (isSurprise || false) : false;
+
     const [challengeCount] = await pool.execute(
       'SELECT COUNT(*) as count FROM challenges WHERE event_id = ?',
       [eventId]
@@ -59,12 +87,12 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
 
     await pool.execute(
       'INSERT INTO challenges (id, event_id, title, description, points, is_surprise, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, eventId, title, description || null, points, isSurprise || false, count]
+      [id, eventId, title, description || null, points, effectiveIsSurprise, count]
     );
 
-    const challenge = { id, eventId, title, description, points, isSurprise, status: 'active' };
+    const challenge = { id, eventId, title, description, points, isSurprise: effectiveIsSurprise, status: 'active' };
 
-    if (!isSurprise) {
+    if (!effectiveIsSurprise) {
       emitToEvent(eventId, 'challenge-started', challenge);
     }
 
@@ -91,9 +119,27 @@ router.post('/challenges/:id/winner/:submissionId', requireAuth, async (req: Aut
 
     const eventId = (challengeRows as any[])[0].event_id as string;
 
-    await pool.execute('UPDATE submissions SET is_winner = FALSE WHERE challenge_id = ?', [id]);
-    await pool.execute('UPDATE submissions SET is_winner = TRUE WHERE id = ? AND challenge_id = ?', [submissionId, id]);
-    await pool.execute("UPDATE challenges SET status = 'judged' WHERE id = ?", [id]);
+    // audit: MED-009 — selection de gagnant dans une transaction unique.
+    // audit: LOW-020 — verifier affectedRows : ne marquer 'judged' que si le
+    // submissionId designe un gagnant valide pour ce defi (sinon 404).
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute('UPDATE submissions SET is_winner = FALSE WHERE challenge_id = ?', [id]);
+      const [winRes] = await conn.execute('UPDATE submissions SET is_winner = TRUE WHERE id = ? AND challenge_id = ?', [submissionId, id]);
+      if ((winRes as any).affectedRows !== 1) {
+        await conn.rollback();
+        res.status(404).json({ error: 'Soumission non trouvee pour ce defi' });
+        return;
+      }
+      await conn.execute("UPDATE challenges SET status = 'judged' WHERE id = ?", [id]);
+      await conn.commit();
+    } catch (txError) {
+      await conn.rollback();
+      throw txError;
+    } finally {
+      conn.release();
+    }
 
     emitToEvent(eventId, 'winner-selected', { challengeId: id, submissionId });
     emitToEvent(eventId, 'leaderboard-updated', {});
@@ -104,6 +150,8 @@ router.post('/challenges/:id/winner/:submissionId', requireAuth, async (req: Aut
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });
+
+
 
 // POST /challenges/:id/reveal
 router.post('/challenges/:id/reveal', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
@@ -160,11 +208,24 @@ router.delete('/challenges/:id', requireAuth, async (req: AuthRequest, res: Resp
     );
     const s3Keys: string[] = (subRows as any[]).map((s: any) => s.photo_key);
 
-    await pool.execute('DELETE FROM votes WHERE challenge_id = ?', [req.params.id]);
-    await pool.execute('DELETE FROM submissions WHERE challenge_id = ?', [req.params.id]);
-    await pool.execute('DELETE FROM challenges WHERE id = ?', [req.params.id]);
+    // audit: LOW-015 — suppressions DB multi-tables dans une transaction unique.
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute('DELETE FROM votes WHERE challenge_id = ?', [req.params.id]);
+      await conn.execute('DELETE FROM submissions WHERE challenge_id = ?', [req.params.id]);
+      await conn.execute('DELETE FROM challenges WHERE id = ?', [req.params.id]);
+      await conn.commit();
+    } catch (txError) {
+      await conn.rollback();
+      throw txError;
+    } finally {
+      conn.release();
+    }
 
     // Delete S3 files (non-blocking)
+    // TODO(audit:LOW-015): remplacer le fire-and-forget S3 par une file de retry persistee
+    // pour eviter les cles orphelines en cas d'echec S3 sans trace en base.
     if (s3Keys.length > 0) {
       Promise.all(s3Keys.map(key => deleteFromS3(key).catch(err => console.error('S3 delete error for', key, err)))).catch(() => {});
     }

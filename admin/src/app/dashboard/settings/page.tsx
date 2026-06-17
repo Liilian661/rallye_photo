@@ -3,13 +3,15 @@
 import { useState, useEffect } from 'react';
 import api from '@/lib/api';
 
+// audit: LOW-083 — accessKey/secretKey retires du type : GET /admin/settings/s3 ne doit jamais
+// renvoyer les secrets (au plus un booleen `configured`). Le type front ne les declare donc plus,
+// et loadConfig ne tente plus de les lire. TODO backend: garantir que la reponse ne contient
+// jamais les credentials S3.
 interface S3Config {
   configured: boolean;
   endpoint: string;
   region: string;
   bucket: string;
-  accessKey: string;
-  secretKey: string;
 }
 
 export default function SettingsPage() {
@@ -50,6 +52,14 @@ export default function SettingsPage() {
     e.preventDefault();
     setMessage(null);
     setTestResult(null);
+
+    // audit: INFO-029 — refuser la soumission si exactement un des deux champs cle est rempli :
+    // remplacer l'access key sans le secret (ou l'inverse) casserait l'authentification S3.
+    if ((accessKey.trim() === '') !== (secretKey.trim() === '')) {
+      setMessage({ type: 'error', text: 'Renseignez Access Key ET Secret Key, ou laissez les deux vides.' });
+      return;
+    }
+
     setSaving(true);
 
     try {

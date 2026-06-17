@@ -10,7 +10,7 @@ import { validateBody } from '../middleware/validateInput';
 import { createEventSchema } from '../utils/validators';
 import { generateUniqueEventCode } from '../utils/codeGenerator';
 import { emitToEvent } from '../config/socket';
-import { resolveEventTier, getEventLimit, USER_PLANS } from '../config/plans';
+import { resolveEventTier, getEventLimit, USER_PLANS, EVENT_TIER_LIMITS, EventTier } from '../config/plans';
 import { generateEventPhotoSecret } from '../utils/photoToken';
 import { getS3Client, getS3Config, uploadToS3, deleteFromS3 } from '../utils/s3Service';
 import multer from 'multer';
@@ -83,23 +83,43 @@ router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthR
     const joinUrl = (process.env.CLIENT_URL || 'https://app.rallye-photo.com') + '/join/' + code;
     const qrCodeDataUrl = await QRCode.toDataURL(joinUrl, { width: 400, margin: 2 });
 
-    await pool.execute(
-      "INSERT INTO events (id, user_id, name, description, event_date, deadline, code, qr_code_url, scoring_mode, team_mode, photo_secret, status, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
-      [id, userId, name, description || null, eventDate || null, deadline || null, code, qrCodeDataUrl, scoringMode || 'winner', teamMode ? 1 : 0, photoSecret, tier]
-    );
+    // audit: MED-007 - transaction englobant le decrement conditionnel du credit
+    // ET l'INSERT de l'event : on ne tague 'premium' que si le decrement atomique
+    // a bien consomme 1 credit (affectedRows === 1). Empeche 2 events premium pour
+    // 1 credit en cas de creation concurrente, et l'event premium gratuit en cas de crash.
+    const conn = await pool.getConnection();
+    let finalTier = tier;
+    try {
+      await conn.beginTransaction();
 
-    // Consommer 1 crédit si l'event est premium
-    if (tier === 'premium') {
-      await pool.execute(
-        'UPDATE users SET event_credits = event_credits - 1 WHERE id = ? AND event_credits > 0',
-        [userId]
+      if (tier === 'premium') {
+        const [decrement]: any = await conn.execute(
+          'UPDATE users SET event_credits = event_credits - 1 WHERE id = ? AND event_credits > 0',
+          [userId]
+        );
+        // Si aucun credit n'a pu etre decremente (course concurrente), retomber en 'free'
+        if (decrement.affectedRows !== 1) {
+          finalTier = resolveEventTier(plan, 0);
+        }
+      }
+
+      await conn.execute(
+        "INSERT INTO events (id, user_id, name, description, event_date, deadline, code, qr_code_url, scoring_mode, team_mode, photo_secret, status, tier) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?)",
+        [id, userId, name, description || null, eventDate || null, deadline || null, code, qrCodeDataUrl, scoringMode || 'winner', teamMode ? 1 : 0, photoSecret, finalTier]
       );
+
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
     }
 
     res.status(201).json({
       id, name, description, eventDate, deadline, code,
       scoringMode: scoringMode || 'winner',
-      qrCodeUrl: qrCodeDataUrl, status: 'active', tier,
+      qrCodeUrl: qrCodeDataUrl, status: 'active', tier: finalTier,
     });
   } catch (error) {
     console.error('Create event error:', error);
@@ -125,7 +145,10 @@ router.get('/join/:code', async (req, res: Response): Promise<void> => {
 
     const event = events[0];
 
-    if (event.status === 'archived') {
+    // audit: LOW-032 - ne pas exposer un evenement non public via /join/:code.
+    // Seul un event 'active' est rejoignable ; tout autre status (archived, ended,
+    // brouillon, suspendu...) est traite comme termine/indisponible.
+    if (event.status !== 'active') {
       res.status(410).json({ error: 'Cet evenement est termine' });
       return;
     }
@@ -153,8 +176,15 @@ router.get('/join/:code', async (req, res: Response): Promise<void> => {
 // GET /events/:id
 router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // audit: HIGH-009 - selection explicite des colonnes : ne JAMAIS renvoyer
+    // photo_secret (utilise pour signer les tokens photo). photo_secret est lu
+    // separement uniquement pour generer les URLs signees ci-dessous.
     const [rows] = await pool.execute(
-      'SELECT * FROM events WHERE id = ? AND user_id = ?',
+      `SELECT id, user_id, name, description, event_date, deadline, code, qr_code_url,
+              gallery_enabled, gallery_locked, gallery_locked_until, scoring_mode, team_mode,
+              theme_color, logo_key, banner_key, status, tier, created_at,
+              photo_secret
+       FROM events WHERE id = ? AND user_id = ?`,
       [req.params.id, req.user!.userId]
     );
     const events = rows as any[];
@@ -166,9 +196,12 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
 
     const event = events[0];
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
+    // audit: HIGH-009 - retirer photo_secret de l'objet renvoye au client
+    const { photo_secret, ...eventPublic } = event;
 
+    // audit: HIGH-009 - on diffuse eventPublic (sans photo_secret), pas event
     const result = {
-      ...event,
+      ...eventPublic,
       logo_url: event.logo_key && event.photo_secret
         ? apiBase + '/photos/' + signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
         : null,
@@ -188,6 +221,24 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
 router.patch('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { name, description, eventDate, deadline, galleryEnabled, status, scoringMode, teamMode } = req.body;
+
+    // audit: LOW-016 - validation des valeurs PATCH (enum status/scoringMode, hex themeColor).
+    // Les NOMS de colonnes restent une whitelist en dur (cf INFO-006), seules les valeurs
+    // sont parametrees ; on rejette ici les valeurs hors domaine avant ecriture.
+    if (status !== undefined && !['active', 'ended', 'archived'].includes(status)) {
+      res.status(400).json({ error: 'Statut invalide' });
+      return;
+    }
+    if (scoringMode !== undefined && !['winner', 'participation'].includes(scoringMode)) {
+      res.status(400).json({ error: 'Mode de scoring invalide' });
+      return;
+    }
+    if (req.body.themeColor !== undefined && req.body.themeColor !== null
+        && !/^#[0-9a-fA-F]{6}$/.test(req.body.themeColor)) {
+      res.status(400).json({ error: 'Couleur de theme invalide (format hex #rrggbb)' });
+      return;
+    }
+
     const fields: string[] = [];
     const values: any[] = [];
 
@@ -399,7 +450,7 @@ router.get('/:id/qr-pdf', requireAuth, async (req: AuthRequest, res: Response): 
 router.get('/:id/export-zip', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const [eventRows] = await pool.execute(
-      'SELECT id, name, code FROM events WHERE id = ? AND user_id = ?',
+      'SELECT id, name, code, tier FROM events WHERE id = ? AND user_id = ?',
       [req.params.id, req.user!.userId]
     );
     if ((eventRows as any[]).length === 0) {
@@ -409,6 +460,20 @@ router.get('/:id/export-zip', requireAuth, async (req: AuthRequest, res: Respons
 
     const event = (eventRows as any[])[0];
 
+    // audit: LOW-028 - faire respecter le controle de tier exportZip cote serveur
+    const exportTier = (EVENT_TIER_LIMITS[event.tier as EventTier] ?? EVENT_TIER_LIMITS.free);
+    if (!exportTier.exportZip) {
+      res.status(403).json({
+        error: 'L\'export ZIP est reserve aux evenements premium ou pro.',
+        code: 'TIER_FORBIDDEN',
+      });
+      return;
+    }
+
+    // audit: LOW-031 - borner le volume exporte (cap) pour limiter le risque DoS
+    // memoire/temps (recuperation S3 sequentielle non paginee). Entier en dur, non
+    // injectable, interpole directement.
+    const EXPORT_ZIP_MAX = 2000;
     const [subRows] = await pool.execute(
       `SELECT s.id, s.photo_key, s.media_type, s.submitted_at,
               p.name as participant_name, c.title as challenge_title
@@ -416,7 +481,8 @@ router.get('/:id/export-zip', requireAuth, async (req: AuthRequest, res: Respons
        JOIN participants p ON p.id = s.participant_id
        JOIN challenges c ON c.id = s.challenge_id
        WHERE s.event_id = ?
-       ORDER BY c.title, p.name`,
+       ORDER BY c.title, p.name
+       LIMIT ${EXPORT_ZIP_MAX}`,
       [req.params.id]
     );
     const submissions = subRows as any[];
@@ -496,11 +562,16 @@ const brandingUpload = multer({
 // POST /events/:id/logo
 router.post('/:id/logo', requireAuth, brandingUpload.single('logo'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const [rows] = await pool.execute('SELECT id, code, photo_secret FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const [rows] = await pool.execute('SELECT id, code, photo_secret, tier FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
     if ((rows as any[]).length === 0) { res.status(404).json({ error: 'Evenement non trouve' }); return; }
     if (!req.file) { res.status(400).json({ error: 'Fichier manquant' }); return; }
 
     const event = (rows as any[])[0];
+    // audit: LOW-027 - faire respecter le controle de tier branding cote serveur
+    if (!(EVENT_TIER_LIMITS[event.tier as EventTier] ?? EVENT_TIER_LIMITS.free).branding) {
+      res.status(403).json({ error: 'Le branding est reserve aux evenements premium ou pro.', code: 'TIER_FORBIDDEN' });
+      return;
+    }
     const buffer = await sharp(req.file.buffer).resize({ width: 400, height: 400, fit: 'cover' }).webp({ quality: 85 }).toBuffer();
     const key = `${event.code}/branding/logo.webp`;
 
@@ -519,11 +590,16 @@ router.post('/:id/logo', requireAuth, brandingUpload.single('logo'), async (req:
 // POST /events/:id/banner
 router.post('/:id/banner', requireAuth, brandingUpload.single('banner'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const [rows] = await pool.execute('SELECT id, code, photo_secret FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const [rows] = await pool.execute('SELECT id, code, photo_secret, tier FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
     if ((rows as any[]).length === 0) { res.status(404).json({ error: 'Evenement non trouve' }); return; }
     if (!req.file) { res.status(400).json({ error: 'Fichier manquant' }); return; }
 
     const event = (rows as any[])[0];
+    // audit: LOW-027 - faire respecter le controle de tier branding cote serveur
+    if (!(EVENT_TIER_LIMITS[event.tier as EventTier] ?? EVENT_TIER_LIMITS.free).branding) {
+      res.status(403).json({ error: 'Le branding est reserve aux evenements premium ou pro.', code: 'TIER_FORBIDDEN' });
+      return;
+    }
     const buffer = await sharp(req.file.buffer).resize({ width: 1200, height: 400, fit: 'cover' }).webp({ quality: 80 }).toBuffer();
     const key = `${event.code}/branding/banner.webp`;
 
@@ -542,7 +618,13 @@ router.post('/:id/banner', requireAuth, brandingUpload.single('banner'), async (
 // DELETE /events/:id/logo
 router.delete('/:id/logo', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // audit: LOW-030 - recuperer la cle S3 avant de la perdre (NULL) puis supprimer l'objet
+    const [rows] = await pool.execute('SELECT logo_key FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const key = (rows as any[])[0]?.logo_key;
     await pool.execute('UPDATE events SET logo_key = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    if (key) {
+      deleteFromS3(key).catch(err => console.error('S3 delete logo error for', key, err));
+    }
     res.json({ message: 'Logo supprime' });
   } catch (error) {
     res.status(500).json({ error: 'Erreur' });
@@ -552,7 +634,13 @@ router.delete('/:id/logo', requireAuth, async (req: AuthRequest, res: Response):
 // DELETE /events/:id/banner
 router.delete('/:id/banner', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // audit: LOW-030 - recuperer la cle S3 avant de la perdre (NULL) puis supprimer l'objet
+    const [rows] = await pool.execute('SELECT banner_key FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const key = (rows as any[])[0]?.banner_key;
     await pool.execute('UPDATE events SET banner_key = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    if (key) {
+      deleteFromS3(key).catch(err => console.error('S3 delete banner error for', key, err));
+    }
     res.json({ message: 'Banniere supprimee' });
   } catch (error) {
     res.status(500).json({ error: 'Erreur' });

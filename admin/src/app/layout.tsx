@@ -6,11 +6,12 @@ export const metadata: Metadata = {
   description: 'Panel administration Rallye Photo',
 };
 
+// audit: LOW-064 — autoriser le zoom (accessibilite WCAG 1.4.4) : on retire userScalable:false
+// et maximumScale:1 (qui bloquaient le pincement-zoom pour les utilisateurs malvoyants).
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
+  maximumScale: 5,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

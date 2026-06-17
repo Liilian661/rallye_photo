@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
 import api from '@/lib/api';
 import { getParticipant } from '@/lib/participant';
@@ -39,6 +39,10 @@ export default function LeaderboardPage() {
     if (p) setParticipantId(p.id);
   }, [eventId]);
 
+  // audit: LOW-066/LOW-067 — ref vers la derniere version de loadLeaderboard
+  // pour decoupler le useEffect socket (stable sur [eventId]).
+  const loadLeaderboardRef = useRef<() => void>(() => {});
+
   const loadLeaderboard = useCallback(async () => {
     try {
       const { data } = await api.get(`/events/${eventId}/leaderboard`);
@@ -52,24 +56,32 @@ export default function LeaderboardPage() {
   }, [eventId]);
 
   useEffect(() => {
+    loadLeaderboardRef.current = loadLeaderboard;
+  }, [loadLeaderboard]);
+
+  useEffect(() => {
     loadLeaderboard();
   }, [loadLeaderboard]);
 
   useEffect(() => {
+    // audit: MED-013 — envoyer le token participant au handshake si disponible.
+    const participant = getParticipant(eventId) as ({ participantToken?: string } | null);
     const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
       transports: ['websocket', 'polling'],
+      auth: participant?.participantToken ? { token: participant.participantToken } : undefined,
     });
 
     socket.on('connect', () => { socket.emit('join-event', eventId); });
-    socket.on('leaderboard-updated', () => loadLeaderboard());
-    socket.on('winner-selected', () => loadLeaderboard());
-    socket.on('new-submission', () => loadLeaderboard());
+    socket.on('leaderboard-updated', () => loadLeaderboardRef.current());
+    socket.on('winner-selected', () => loadLeaderboardRef.current());
+    socket.on('new-submission', () => loadLeaderboardRef.current());
 
     return () => {
       socket.emit('leave-event', eventId);
       socket.disconnect();
     };
-  }, [eventId, loadLeaderboard]);
+    // audit: LOW-067 — dependances reduites a [eventId] pour une connexion stable.
+  }, [eventId]);
 
   // Group by teams
   const getTeamGroups = (): TeamGroup[] => {

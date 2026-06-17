@@ -55,6 +55,39 @@ interface Team {
   score: number;
 }
 
+// audit: MED-025 — validation cote client de la taille/type des images (logo/banniere) AVANT upload.
+// L'attribut `accept` est un simple filtre UI contournable ; on verifie ici file.type et file.size.
+// La verite reste le serveur (taille/type/magic-bytes) — TODO: confirmer la validation backend.
+const ALLOWED_IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+
+function validateImageFile(file: File): string | null {
+  if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+    return 'Format invalide. Formats acceptes : JPEG, PNG, WebP.';
+  }
+  if (file.size > MAX_IMAGE_BYTES) {
+    return 'Fichier trop volumineux (max 5 MB).';
+  }
+  return null;
+}
+
+// audit: LOW-077 — telechargement blob fiable : anchor insere au DOM, puis revocation differee
+// dans un finally (l'objectURL n'est jamais fuite, meme en cas d'exception, et le download n'est
+// pas annule par une revocation trop precoce sur certains navigateurs).
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  } finally {
+    setTimeout(() => URL.revokeObjectURL(url), 10000);
+  }
+}
+
 export default function EventDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -303,8 +336,15 @@ export default function EventDetailPage() {
   const isPastDeadline = event.deadline ? new Date(event.deadline).getTime() < Date.now() : false;
 
   // Lightbox with navigation
+  // TODO(audit:INFO-023): completer l'accessibilite (piege/restauration de focus, aria-label sur les
+  // boutons de navigation, vignettes <img>/<video> activables au clavier, role=dialog sur la modale
+  // d'edition, posters au lieu d'autoPlay sur toutes les miniatures). Fait ici : role/aria-modal +
+  // muted sur le lightbox. Le reste est un refactor UI plus large, hors perimetre de ce correctif.
   const lightbox = previewIndex !== null && submissions[previewIndex] ? (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Apercu de la photo"
       onClick={() => setPreviewIndex(null)}
       style={{
         position: 'fixed',
@@ -338,7 +378,8 @@ export default function EventDetailPage() {
         {submissions[previewIndex].media_type === 'video' ? (
           <video
             src={submissions[previewIndex].photo_url}
-            playsInline autoPlay controls loop
+            // audit: INFO-023 — `muted` requis pour que l'autoplay ne soit pas bloque par le navigateur.
+            playsInline autoPlay controls loop muted
             style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: 12, objectFit: 'contain' }}
             onClick={(e) => e.stopPropagation()}
           />
@@ -700,7 +741,11 @@ export default function EventDetailPage() {
                   <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                       <label style={{ fontSize: 13, color: 'var(--rp-text-secondary)' }}>Points :</label>
-                      <input type="number" className="input-field" value={newPoints} onChange={(e) => setNewPoints(parseInt(e.target.value) || 10)} min={1} max={1000} style={{ width: 80 }} />
+                      <input type="number" className="input-field" value={newPoints} onChange={(e) => {
+                        // audit: LOW-079 — clamp client [1,1000] (le min/max HTML ne borne pas la saisie clavier/collage)
+                        const n = parseInt(e.target.value, 10);
+                        setNewPoints(Number.isNaN(n) ? 10 : Math.min(1000, Math.max(1, n)));
+                      }} min={1} max={1000} style={{ width: 80 }} />
                     </div>
                     <button type="submit" className="btn-primary" style={{ fontSize: 13, padding: '8px 20px' }}>Creer</button>
                     <button type="button" className="btn-ghost" onClick={() => setShowAddChallenge(false)}>Annuler</button>
@@ -850,12 +895,7 @@ export default function EventDetailPage() {
                 onClick={async () => {
                   try {
                     const response = await api.get(`/events/${event.id}/qr-pdf`, { responseType: 'blob' });
-                    const url = URL.createObjectURL(response.data);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `rallye-photo-${event.code}.pdf`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    downloadBlob(response.data, `rallye-photo-${event.code}.pdf`); // audit: LOW-077
                   } catch (err) {
                     alert('Erreur lors du telechargement');
                   }
@@ -869,12 +909,7 @@ export default function EventDetailPage() {
                 onClick={async () => {
                   try {
                     const response = await api.get(`/events/${event.id}/export-zip`, { responseType: 'blob', timeout: 120000 });
-                    const url = URL.createObjectURL(response.data);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = `rallye-photo-${event.code}.zip`;
-                    a.click();
-                    URL.revokeObjectURL(url);
+                    downloadBlob(response.data, `rallye-photo-${event.code}.zip`); // audit: LOW-077
                   } catch (err: any) {
                     const msg = err.response?.status === 404 ? 'Aucune photo a exporter' : 'Erreur lors de l\'export';
                     alert(msg);
@@ -916,6 +951,13 @@ export default function EventDetailPage() {
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
+                    // audit: MED-025 — valider taille/type avant envoi
+                    const validationError = validateImageFile(file);
+                    if (validationError) {
+                      alert(validationError);
+                      e.target.value = '';
+                      return;
+                    }
                     try {
                       const formData = new FormData();
                       formData.append('logo', file);
@@ -954,6 +996,13 @@ export default function EventDetailPage() {
                   onChange={async (e) => {
                     const file = e.target.files?.[0];
                     if (!file) return;
+                    // audit: MED-025 — valider taille/type avant envoi
+                    const validationError = validateImageFile(file);
+                    if (validationError) {
+                      alert(validationError);
+                      e.target.value = '';
+                      return;
+                    }
                     try {
                       const formData = new FormData();
                       formData.append('banner', file);

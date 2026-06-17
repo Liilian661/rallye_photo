@@ -12,14 +12,20 @@ export default function SettingsPage() {
   const [referralLink, setReferralLink] = useState('');
   const [referralCode, setReferralCode] = useState('');
   const [copied, setCopied] = useState(false);
+  // audit: INFO-031 — distinguer 'chargement' / 'charge' / 'erreur' au lieu d'un "Chargement..."
+  // permanent quand l'appel echoue (catch vide).
+  const [referralState, setReferralState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
     api.get('/affiliates/me')
       .then(({ data }) => {
         setReferralLink(data.referralLink);
         setReferralCode(data.referralCode);
+        setReferralState('ready');
       })
-      .catch(() => {});
+      .catch(() => {
+        setReferralState('error'); // audit: INFO-031 — surface l'echec reseau
+      });
   }, []);
 
   const copyLink = () => {
@@ -89,7 +95,7 @@ export default function SettingsPage() {
         <p style={{ fontSize: 13, color: 'var(--rp-text-muted)', marginBottom: 14 }}>
           Partagez ce lien — vous serez récompensé dès que vos invités réalisent leur premier achat.
         </p>
-        {referralLink ? (
+        {referralState === 'ready' && referralLink ? (
           <>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 8 }}>
               <div style={{
@@ -119,6 +125,10 @@ export default function SettingsPage() {
               Code court : <span style={{ fontFamily: 'monospace', fontWeight: 700, color: 'var(--rp-accent)' }}>{referralCode}</span>
             </p>
           </>
+        ) : referralState === 'error' ? (
+          <p style={{ fontSize: 13, color: 'var(--rp-danger-text)' }}>
+            Impossible de charger votre lien d&apos;invitation. Reessayez plus tard.
+          </p>
         ) : (
           <p style={{ fontSize: 13, color: 'var(--rp-text-muted)' }}>Chargement...</p>
         )}

@@ -43,13 +43,29 @@ app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 
 // Middleware
 app.use(helmet());
+
+// audit: LOW-048 — trim + filtre des origines vides (virgule finale / espaces)
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
 app.use(cors({
-  origin: process.env.CORS_ORIGINS?.split(',') || [],
+  origin: corsOrigins,
   credentials: true,
 }));
 app.use(morgan('combined'));
-app.use(express.json({ limit: '1mb' }));
-app.use(express.urlencoded({ extended: true }));
+
+// audit: MED-016 — express.json global NE DOIT PAS reparser /webhooks/stripe
+// (body deja consomme en raw par express.raw ci-dessus). Sans cette exclusion,
+// req.body pourrait etre ecrase et casser la verification de signature Stripe.
+const jsonParser = express.json({ limit: '1mb' });
+app.use((req, res, next) => {
+  if (req.path === '/webhooks/stripe') return next();
+  return jsonParser(req, res, next);
+});
+// audit: LOW-050 — limite de taille explicite + extended:false (API JSON-only,
+// reduit la surface de prototype pollution de qs).
+app.use(express.urlencoded({ extended: false, limit: '100kb' }));
 app.use(cookieParser());
 
 // Health check

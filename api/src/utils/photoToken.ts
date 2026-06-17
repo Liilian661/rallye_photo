@@ -64,9 +64,14 @@ export function signPhotoToken(
  * Verifie et decode un token photo
  * Retourne le photo_key S3 si valide, null sinon
  */
+// audit: LOW-003 — expectedEventId optionnel : defense en profondeur. Quand l'appelant
+// connait l'event attendu via un contexte serveur independant, on rejette tout token
+// dont l'eventId verifie ne correspond pas, plutot que de faire confiance au seul champ
+// du token pour resoudre le secret.
 export function verifyPhotoToken(
   token: string,
-  eventSecret: string
+  eventSecret: string,
+  expectedEventId?: string
 ): { photoKey: string; eventId: string } | null {
   try {
     // Decode sans verifier d'abord pour extraire le salt
@@ -80,6 +85,11 @@ export function verifyPhotoToken(
     const verified = jwt.verify(token, signingKey, {
       algorithms: ['HS512'],
     }) as any;
+
+    // audit: LOW-003 — rejette si l'eventId verifie ne correspond pas a l'event attendu.
+    if (expectedEventId !== undefined && verified.e !== expectedEventId) {
+      return null;
+    }
 
     return {
       photoKey: verified.k,

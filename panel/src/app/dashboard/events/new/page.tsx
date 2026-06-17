@@ -38,21 +38,33 @@ export default function NewEventPage() {
         teamMode,
       });
 
-      // Creer les defis du template si selectionne
+      // audit: MED-024 — creer les defis du template en parallele (Promise.allSettled) et
+      // remonter explicitement les echecs a l'organisateur au lieu de les avaler en console.error.
       if (selectedTemplate) {
         const template = templates.find(t => t.id === selectedTemplate);
-        if (template) {
-          for (const challenge of template.challenges) {
-            try {
-              await api.post(`/events/${data.id}/challenges`, {
+        if (template && template.challenges.length > 0) {
+          const results = await Promise.allSettled(
+            template.challenges.map((challenge) =>
+              api.post(`/events/${data.id}/challenges`, {
                 title: challenge.title,
                 description: challenge.description || null,
                 points: challenge.points,
                 isSurprise: false,
-              });
-            } catch (err) {
-              console.error('Challenge creation error:', err);
-            }
+              })
+            )
+          );
+          const failed = results.filter((r) => r.status === 'rejected').length;
+          if (failed > 0) {
+            // L'event est cree ; on previent que certains defis n'ont pas pu etre ajoutes
+            // (l'organisateur pourra les ajouter manuellement sur la page de l'event).
+            setError(
+              `Evenement cree, mais ${failed} defi(s) du template n'ont pas pu etre ajoutes. ` +
+                `Vous pourrez les creer manuellement.`
+            );
+            await refreshUser();
+            setLoading(false);
+            router.push(`/dashboard/events/${data.id}`);
+            return;
           }
         }
       }

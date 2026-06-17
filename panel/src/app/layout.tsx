@@ -23,6 +23,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link href="https://fonts.googleapis.com/css2?family=Clash+Display:wght@400;500;600;700&family=Satoshi:wght@400;500;700&display=swap" rel="stylesheet" />
+        {/* audit: INFO-032 — source UNIQUE du script anti-flash de theme (plus de duplication dans
+            theme.tsx, cf MED-023). Contenu statique constant : aucune interpolation de variable. */}
         <script
           dangerouslySetInnerHTML={{
             __html: `

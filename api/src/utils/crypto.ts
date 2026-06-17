@@ -16,6 +16,18 @@ export async function comparePassword(password: string, hash: string): Promise<b
   return bcrypt.compare(password, hash);
 }
 
+// audit: MED-002 — hash bcrypt factice (meme cout BCRYPT_ROUNDS) calcule une seule fois
+// au chargement du module, pour egaliser le temps de reponse de /auth/login quand l'email
+// n'existe pas (anti-enumeration par timing). Genere depuis une valeur aleatoire : il ne
+// correspond a aucun mot de passe, donc bcrypt.compare retournera toujours false.
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomBytes(32).toString('hex'), BCRYPT_ROUNDS);
+
+// audit: MED-002 — execute une comparaison bcrypt factice (cout constant) sans reveler
+// l'inexistence de l'utilisateur.
+export async function comparePasswordDummy(password: string): Promise<boolean> {
+  return bcrypt.compare(password, DUMMY_PASSWORD_HASH);
+}
+
 export function generateAccessToken(payload: { userId: string; email: string; impersonatedBy?: string }): string {
   const options: SignOptions = {
     expiresIn: (process.env.JWT_ACCESS_EXPIRES || '15m') as any,

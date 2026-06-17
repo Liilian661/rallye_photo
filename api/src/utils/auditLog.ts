@@ -17,7 +17,16 @@ export type AuditAction =
   | 'plan.upgrade'
   | 'plan.cancel'
   | 'credit.purchase'
-  | 'affiliate.convert';
+  | 'affiliate.convert'
+  // audit: INFO-014 — actions admin sensibles ajoutees au type pour aligner la
+  // liste auditable avec les appels reels (admin.ts) et eviter une erreur TS.
+  // Les handlers admin (delete user/event, patch is_admin) DOIVENT appeler
+  // logAudit avec ces actions (a brancher cote admin.ts, hors perimetre ici).
+  | 'admin.impersonate'
+  | 'admin.delete_user'
+  | 'admin.delete_event'
+  | 'admin.delete_participant'
+  | 'admin.update_user';
 
 export async function logAudit(
   action: AuditAction,

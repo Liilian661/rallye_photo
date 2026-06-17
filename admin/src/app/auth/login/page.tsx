@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
-import api from '@/lib/api';
+import api, { COOKIE_OPTS } from '@/lib/api';
 
 export default function AdminLoginPage() {
   const [email, setEmail] = useState('');
@@ -20,8 +20,11 @@ export default function AdminLoginPage() {
     try {
       // Login via normal auth
       const { data } = await api.post('/auth/login', { email, password });
-      Cookies.set('adminAccessToken', data.accessToken, { expires: 1 });
-      Cookies.set('adminRefreshToken', data.refreshToken, { expires: 30 });
+      // audit: HIGH-017 — durcir les cookies admin : secure (en prod) + sameSite strict,
+      // au lieu de cookies JS sans aucun attribut. TODO(httpOnly): faire poser ces cookies
+      // par l'API en Set-Cookie httpOnly + Secure + SameSite=Strict (cf COOKIE_OPTS).
+      Cookies.set('adminAccessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
+      Cookies.set('adminRefreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
 
       // Check if user is admin
       const { data: profile } = await api.get('/auth/me');
@@ -33,10 +36,12 @@ export default function AdminLoginPage() {
         return;
       }
 
-      Cookies.set('adminUser', JSON.stringify(profile), { expires: 30 });
+      Cookies.set('adminUser', JSON.stringify(profile), { expires: 30, ...COOKIE_OPTS });
       router.push('/dashboard');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Erreur de connexion');
+    } catch {
+      // audit: LOW-076 — ne pas afficher le message d'erreur backend brut (evite l'enumeration
+      // de comptes et la fuite de details internes) : message generique controle cote front.
+      setError('Identifiants invalides ou erreur de connexion');
     } finally {
       setLoading(false);
     }

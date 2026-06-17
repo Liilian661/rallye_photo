@@ -35,12 +35,21 @@ function TierBadge({ tier }: { tier: string }) {
 export default function EventsPage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
+  // audit: INFO-031 — distinguer l'echec reseau de l'etat vide legitime (sinon "Aucun evenement"
+  // s'affiche meme quand l'API a echoue).
+  const [loadError, setLoadError] = useState(false);
 
-  useEffect(() => {
+  const loadEvents = () => {
+    setLoading(true);
+    setLoadError(false);
     api.get('/events')
       .then(({ data }) => setEvents(data))
-      .catch(console.error)
+      .catch((err) => { console.error(err); setLoadError(true); })
       .finally(() => setLoading(false));
+  };
+
+  useEffect(() => {
+    loadEvents();
   }, []);
 
   return (
@@ -67,6 +76,14 @@ export default function EventsPage() {
 
       {loading ? (
         <p style={{ color: 'var(--rp-text-muted)' }}>Chargement...</p>
+      ) : loadError ? (
+        /* audit: INFO-031 — etat d'erreur distinct avec bouton Reessayer */
+        <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
+          <p style={{ fontSize: 15, color: 'var(--rp-danger-text)', marginBottom: '1rem' }}>
+            Erreur de chargement des événements.
+          </p>
+          <button className="btn-secondary" onClick={loadEvents}>Réessayer</button>
+        </div>
       ) : events.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
           <p style={{

@@ -1,8 +1,13 @@
 import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../utils/auditLog';
+import { rateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
+
+// audit: LOW-012 — limiter la creation de session de paiement (chaque appel
+// declenche un appel reseau sortant vers Stripe). 10 requetes / minute / IP.
+const checkoutLimiter = rateLimiter(10, 60 * 1000);
 
 const CREDIT_PRICE_CENTS      = 1200;  // 12 €
 const PRO_MONTHLY_PRICE_CENTS = 2400;  // 24 €/mois
@@ -10,7 +15,7 @@ const PRO_YEARLY_PRICE_CENTS  = 19900; // 199 €/an (−31 %)
 
 // POST /payments/checkout
 // Body: { type: 'credit', quantity?: number } | { type: 'pro' }
-router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+router.post('/checkout', checkoutLimiter, requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   if (!stripeKey) {
     res.status(503).json({ error: 'Paiement non disponible', code: 'STRIPE_NOT_CONFIGURED' });
@@ -46,6 +51,8 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response): P
           },
           quantity: qty,
         }],
+        // audit: LOW-011 — lier explicitement la session a l'utilisateur (en plus de metadata)
+        client_reference_id: userId,
         metadata: {
           user_id:  userId,
           type:     'credit',
@@ -71,10 +78,20 @@ router.post('/checkout', requireAuth, async (req: AuthRequest, res: Response): P
           },
           quantity: 1,
         }],
+        // audit: LOW-011 — lier la session a l'utilisateur et propager user_id sur
+        // l'abonnement, pour que subscription.updated/deleted retrouve le user meme
+        // si checkout.completed n'a pas encore ete traite.
+        client_reference_id: userId,
         metadata: {
           user_id: userId,
           type:    'pro',
           billing: isYearly ? 'yearly' : 'monthly',
+        },
+        subscription_data: {
+          metadata: {
+            user_id: userId,
+            type:    'pro',
+          },
         },
         customer_email: req.user!.email,
         success_url: `${panelUrl}/dashboard/pricing?success=pro`,

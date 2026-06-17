@@ -4,6 +4,8 @@ import multer from 'multer';
 import sharp from 'sharp';
 import pool from '../config/database';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+// audit: HIGH-010 / HIGH-011 — auth participant derivee d'un token signe
+import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
 import { emitToEvent } from '../config/socket';
 import { uploadToS3, deleteFromS3 } from '../utils/s3Service';
 import { signPhotoToken } from '../utils/photoToken';
@@ -88,21 +90,28 @@ function getExtension(mimetype: string): string {
 const router = Router();
 
 // POST /events/:eventId/challenges/:challengeId/submit
-router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60000), upload.single('photo'), async (req, res: Response): Promise<void> => {
+// audit: HIGH-011 / CRIT-001 — requireParticipant AVANT multer (lit le header, pas le body).
+// participantId est derive du token verifie, jamais du body.
+router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60000), requireParticipant, upload.single('photo'), async (req: ParticipantRequest, res: Response): Promise<void> => {
   let slotAcquired = false;
+  // audit: LOW-039 — cle S3 uploadee mais pas encore referencee en base ;
+  // nettoyee dans le catch general si l'INSERT echoue (evite les orphelins).
+  let s3KeyUploaded: string | null = null;
 
   try {
     const eventId = req.params.eventId as string;
     const challengeId = req.params.challengeId as string;
-    const { participantId } = req.body;
+    // audit: HIGH-011 — participantId vient du token, pas du body
+    const participantId = req.participant!.participantId;
 
-    if (!req.file) {
-      res.status(400).json({ error: 'Fichier manquant' });
+    // audit: CRIT-001 — le token doit etre lie a CET event
+    if (req.participant!.eventId !== eventId) {
+      res.status(403).json({ error: 'Acces refuse' });
       return;
     }
 
-    if (!participantId) {
-      res.status(400).json({ error: 'Participant ID manquant' });
+    if (!req.file) {
+      res.status(400).json({ error: 'Fichier manquant' });
       return;
     }
 
@@ -196,39 +205,50 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
     // Liberer le buffer original
     req.file.buffer = Buffer.alloc(0);
 
+    // audit: LOW-043 — refuser explicitement si l'event n'a pas de photo_secret :
+    // signer avec une cle degeneree rendrait la photo definitivement inaccessible (403).
+    if (!event.photo_secret) {
+      res.status(503).json({ error: 'Configuration de l\'evenement incomplete. Contactez l\'organisateur.' });
+      return;
+    }
+
     // Structure S3
     const id = uuidv4();
-    const folderDefi = sanitizeForS3(challengeTitle);
+    // audit: MED-020 — garde-fou : un titre de defi qui se reduit a vide (emoji/symboles)
+    // produirait une cle 'code//fichier' rejetee par assertValidS3Key. Fallback non-vide.
+    const folderDefi = sanitizeForS3(challengeTitle) || 'defi';
     const fileName = sanitizeForS3(participantName) + '_' + id.slice(0, 8) + '.' + ext;
     const s3Key = event.code + '/' + folderDefi + '/' + fileName;
     const mediaType = fileIsVideo ? 'video' : 'photo';
 
     // Upload vers S3 avec retry
     await uploadToS3WithRetry(s3Key, uploadBuffer, contentType);
+    s3KeyUploaded = s3Key; // audit: LOW-039 — pour nettoyer S3 si l'INSERT echoue
 
     // Generer un token securise
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
     const photoToken = signPhotoToken(s3Key, eventId, event.photo_secret, 86400);
     const photoUrl = apiBase + '/photos/' + photoToken;
 
+    // audit: LOW-039 — is_winner determine directement dans l'INSERT (atomique),
+    // plus d'UPDATE separe pouvant laisser une soumission sans is_winner.
+    const isWinner = event.scoring_mode === 'participation';
+
     // INSERT avec gestion du doublon
     try {
       await pool.execute(
-        'INSERT INTO submissions (id, event_id, challenge_id, participant_id, photo_url, photo_key, media_type) VALUES (?, ?, ?, ?, ?, ?, ?)',
-        [id, eventId, challengeId, participantId, photoUrl, s3Key, mediaType]
+        'INSERT INTO submissions (id, event_id, challenge_id, participant_id, photo_url, photo_key, media_type, is_winner) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        [id, eventId, challengeId, participantId, photoUrl, s3Key, mediaType, isWinner]
       );
+      s3KeyUploaded = null; // INSERT reussi : le fichier est desormais reference
     } catch (dbError: any) {
       if (dbError.code === 'ER_DUP_ENTRY') {
         try { await deleteFromS3(s3Key); } catch {}
+        s3KeyUploaded = null;
         res.status(409).json({ error: 'Tu as deja soumis pour ce defi' });
         return;
       }
       throw dbError;
-    }
-
-    // Mode participation : auto-win
-    if (event.scoring_mode === 'participation') {
-      await pool.execute('UPDATE submissions SET is_winner = TRUE WHERE id = ?', [id]);
     }
 
     emitToEvent(eventId, 'new-submission', {
@@ -238,6 +258,10 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
     res.status(201).json({ id, challengeId, photoUrl, mediaType });
   } catch (error: any) {
     console.error('Submit error:', error);
+    // audit: LOW-039 — nettoyer le fichier S3 deja uploade si l'INSERT a echoue
+    if (s3KeyUploaded) {
+      try { await deleteFromS3(s3KeyUploaded); } catch (e) { console.error('S3 orphan cleanup failed:', e); }
+    }
     if (error.message?.includes('S3 non configure')) {
       res.status(503).json({ error: 'Stockage S3 non configure. Contactez l\'organisateur.' });
     } else {
@@ -333,10 +357,13 @@ router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Res
   }
 });
 
-// DELETE /submissions/:id/participant/:participantId
-router.delete('/submissions/:id/participant/:participantId', async (req, res: Response): Promise<void> => {
+// DELETE /submissions/:id/participant
+// audit: HIGH-010 — plus de participantId dans l'URL (devinable). Le participantId
+// est derive du token participant signe et l'appartenance est verifiee.
+router.delete('/submissions/:id/participant', requireParticipant, async (req: ParticipantRequest, res: Response): Promise<void> => {
   try {
-    const { id, participantId } = req.params;
+    const { id } = req.params;
+    const participantId = req.participant!.participantId;
     const [rows] = await pool.execute(
       'SELECT s.id, s.photo_key, s.event_id FROM submissions s WHERE s.id = ? AND s.participant_id = ?',
       [id, participantId]

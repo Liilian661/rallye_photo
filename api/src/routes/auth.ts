@@ -1,7 +1,8 @@
 import { Router, Response } from 'express';
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import pool from '../config/database';
-import { hashPassword, comparePassword, generateAccessToken, generateRefreshToken, hashToken, generateEmailToken } from '../utils/crypto';
+import { hashPassword, comparePassword, comparePasswordDummy, generateAccessToken, generateRefreshToken, hashToken, generateEmailToken } from '../utils/crypto';
 import { registerSchema, loginSchema } from '../utils/validators';
 import { validateBody } from '../middleware/validateInput';
 import { requireAuth, AuthRequest } from '../middleware/auth';
@@ -11,12 +12,18 @@ import { logAudit } from '../utils/auditLog';
 
 const router = Router();
 
+// audit: LOW-008 — utiliser req.ip (resolu par Express via 'trust proxy') plutot que de
+// lire X-Forwarded-For brut, qui est spoofable et falsifierait la piste d'audit.
 function getIp(req: any): string {
-  return (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || req.socket?.remoteAddress || '';
+  return req.ip || req.socket?.remoteAddress || '';
 }
 
+// audit: LOW-004 — code de parrainage genere via CSPRNG (crypto) au lieu de Math.random.
+// referral_code est VARCHAR(8) UNIQUE : l'INSERT register capture ER_DUP_ENTRY et reessaie
+// en cas de collision (cf register ci-dessous).
 function generateReferralCode(): string {
-  return Math.random().toString(36).substring(2, 10).toUpperCase();
+  // 5 octets -> 8 caracteres base32 (alphabet hex-safe majuscule)
+  return crypto.randomBytes(8).toString('hex').substring(0, 8).toUpperCase();
 }
 
 // POST /auth/register
@@ -32,8 +39,10 @@ router.post('/register', rateLimiter(5, 60000), validateBody(registerSchema), as
 
     const id            = uuidv4();
     const passwordHash  = await hashPassword(password);
-    const emailToken    = generateEmailToken();
-    const myReferralCode = generateReferralCode();
+    // audit: HIGH-002 / LOW-007 — le token clair part par email, on stocke le hash + une expiration.
+    const emailToken      = generateEmailToken();
+    const emailTokenHash  = hashToken(emailToken);
+    const emailTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24h
 
     // Resolve referrer
     let referrerId: string | null = null;
@@ -47,29 +56,61 @@ router.post('/register', rateLimiter(5, 60000), validateBody(registerSchema), as
       if (referrer) referrerId = referrer.id;
     }
 
-    await pool.execute(
-      'INSERT INTO users (id, first_name, last_name, email, password_hash, newsletter, email_verify_token, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-      [id, firstName, lastName, email, passwordHash, newsletter, emailToken, myReferralCode, referrerId]
-    );
-
-    // Track referral
-    if (referrerId) {
-      await pool.execute(
-        'INSERT INTO referrals (id, referrer_id, referred_id, status) VALUES (?, ?, ?, ?)',
-        [uuidv4(), referrerId, id, 'pending']
-      ).catch((err) => console.error('[Referral] Insert failed:', err));
-    }
-
     const accessToken      = generateAccessToken({ userId: id, email });
     const refreshToken     = generateRefreshToken();
     const refreshTokenHash = hashToken(refreshToken);
     const refreshExpires   = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const familyId         = uuidv4();
 
-    await pool.execute(
-      'INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at) VALUES (?, ?, ?, ?, ?)',
-      [uuidv4(), id, refreshTokenHash, familyId, refreshExpires]
-    );
+    // audit: LOW-005 — encapsuler users + referrals + refresh_tokens dans une transaction
+    // pour eviter les comptes partiellement crees.
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+
+      // audit: LOW-004 — referral_code est UNIQUE : en cas de collision (ER_DUP_ENTRY),
+      // on regenere un code et on reessaie quelques fois plutot que de renvoyer une 500.
+      let inserted = false;
+      for (let attempt = 0; attempt < 5 && !inserted; attempt++) {
+        const myReferralCode = generateReferralCode();
+        try {
+          await conn.execute(
+            'INSERT INTO users (id, first_name, last_name, email, password_hash, newsletter, email_verify_token, email_verify_token_expires, referral_code, referred_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [id, firstName, lastName, email, passwordHash, newsletter, emailTokenHash, emailTokenExpires, myReferralCode, referrerId]
+          );
+          inserted = true;
+        } catch (err: any) {
+          // Retenter uniquement si la collision porte sur referral_code (ER_DUP_ENTRY).
+          if (err?.code === 'ER_DUP_ENTRY' && /referral_code/i.test(err?.message || '')) {
+            continue;
+          }
+          throw err;
+        }
+      }
+      if (!inserted) {
+        throw new Error('Impossible de generer un code de parrainage unique');
+      }
+
+      // Track referral
+      if (referrerId) {
+        await conn.execute(
+          'INSERT INTO referrals (id, referrer_id, referred_id, status) VALUES (?, ?, ?, ?)',
+          [uuidv4(), referrerId, id, 'pending']
+        );
+      }
+
+      await conn.execute(
+        'INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at) VALUES (?, ?, ?, ?, ?)',
+        [uuidv4(), id, refreshTokenHash, familyId, refreshExpires]
+      );
+
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
 
     sendVerificationEmail(email, firstName, emailToken).catch((err) => {
       console.error('Failed to send verification email:', err);
@@ -93,7 +134,8 @@ router.post('/register', rateLimiter(5, 60000), validateBody(registerSchema), as
 });
 
 // GET /auth/verify-email?token=xxx
-router.get('/verify-email', async (req, res: Response): Promise<void> => {
+// audit: MED-003 — rate limiter pour limiter le brute-force des tokens de verification.
+router.get('/verify-email', rateLimiter(10, 60000), async (req, res: Response): Promise<void> => {
   try {
     const { token } = req.query;
 
@@ -102,21 +144,24 @@ router.get('/verify-email', async (req, res: Response): Promise<void> => {
       return;
     }
 
+    // audit: HIGH-002 / LOW-007 — comparer le hash du token (stocke hashe) et exiger
+    // une expiration non depassee.
+    const tokenHash = hashToken(token);
     const [rows] = await pool.execute(
-      'SELECT id, first_name, email FROM users WHERE email_verify_token = ?',
-      [token]
+      'SELECT id, first_name, email FROM users WHERE email_verify_token = ? AND email_verify_token_expires > UTC_TIMESTAMP()',
+      [tokenHash]
     );
     const users = rows as any[];
 
     if (users.length === 0) {
-      res.status(400).json({ error: 'Token invalide ou deja utilise' });
+      res.status(400).json({ error: 'Token invalide, expire ou deja utilise' });
       return;
     }
 
     const user = users[0];
 
     await pool.execute(
-      'UPDATE users SET email_verified = 1, email_verify_token = NULL WHERE id = ?',
+      'UPDATE users SET email_verified = 1, email_verify_token = NULL, email_verify_token_expires = NULL WHERE id = ?',
       [user.id]
     );
 
@@ -135,7 +180,8 @@ router.get('/verify-email', async (req, res: Response): Promise<void> => {
 });
 
 // POST /auth/resend-verification
-router.post('/resend-verification', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+// audit: MED-003 — rate limiter pour limiter l'abus d'envoi d'emails de verification.
+router.post('/resend-verification', rateLimiter(3, 60000), requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const [rows] = await pool.execute(
       'SELECT id, first_name, email, email_verified FROM users WHERE id = ?',
@@ -155,10 +201,13 @@ router.post('/resend-verification', requireAuth, async (req: AuthRequest, res: R
       return;
     }
 
-    const newToken = generateEmailToken();
+    // audit: HIGH-002 / LOW-007 — stocker le hash + expiration, envoyer le token clair par email.
+    const newToken        = generateEmailToken();
+    const newTokenHash    = hashToken(newToken);
+    const newTokenExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
     await pool.execute(
-      'UPDATE users SET email_verify_token = ? WHERE id = ?',
-      [newToken, user.id]
+      'UPDATE users SET email_verify_token = ?, email_verify_token_expires = ? WHERE id = ?',
+      [newTokenHash, newTokenExpires, user.id]
     );
 
     await sendVerificationEmail(user.email, user.first_name, newToken);
@@ -192,15 +241,21 @@ router.post('/forgot-password', rateLimiter(3, 60000), async (req, res: Response
     }
 
     const user       = users[0];
-    const resetToken = generateEmailToken();
-    const resetExpires = new Date(Date.now() + 60 * 60 * 1000);
+    // audit: HIGH-002 — stocker le hash du reset_token, envoyer le token clair par email.
+    const resetToken     = generateEmailToken();
+    const resetTokenHash = hashToken(resetToken);
+    const resetExpires   = new Date(Date.now() + 60 * 60 * 1000);
 
     await pool.execute(
       'UPDATE users SET reset_token = ?, reset_token_expires = ? WHERE id = ?',
-      [resetToken, resetExpires, user.id]
+      [resetTokenHash, resetExpires, user.id]
     );
 
-    await sendResetPasswordEmail(user.email, user.first_name, resetToken);
+    // audit: LOW-001 — fire-and-forget l'envoi d'email pour egaliser la latence des deux
+    // branches (compte existant vs inexistant) et eviter l'enumeration par timing.
+    sendResetPasswordEmail(user.email, user.first_name, resetToken).catch((err) => {
+      console.error('Failed to send reset password email:', err);
+    });
 
     logAudit('user.forgot_password', { userId: user.id, ip: getIp(req) });
 
@@ -226,9 +281,12 @@ router.post('/reset-password', rateLimiter(5, 60000), async (req, res: Response)
       return;
     }
 
+    // audit: HIGH-002 / INFO-001 — comparer le hash du token (stocke hashe) ; la comparaison
+    // porte alors sur un digest, ce qui clot l'oracle de timing theorique.
+    const tokenHash = hashToken(token);
     const [rows] = await pool.execute(
       'SELECT id FROM users WHERE reset_token = ? AND reset_token_expires > UTC_TIMESTAMP()',
-      [token]
+      [tokenHash]
     );
     const users = rows as any[];
 
@@ -245,6 +303,11 @@ router.post('/reset-password', rateLimiter(5, 60000), async (req, res: Response)
     );
 
     await pool.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [users[0].id]);
+
+    // TODO(audit:LOW-002): les access tokens JWT deja emis (TTL ~15m) restent valides apres
+    // reset car stateless. Mitigation complete = token_version / password_changed_at dans le
+    // JWT verifie par le middleware auth (hors perimetre api-auth : middleware/auth.ts + schema).
+    // Acceptable en l'etat vu le TTL court.
 
     logAudit('user.reset_password', { userId: users[0].id, ip: getIp(req) });
 
@@ -266,7 +329,10 @@ router.post('/login', rateLimiter(10, 60000), validateBody(loginSchema), async (
     );
     const users = rows as any[];
 
+    // audit: MED-002 — anti-enumeration par timing : si l'email n'existe pas, on execute
+    // quand meme une comparaison bcrypt factice (meme cout) avant de repondre.
     if (users.length === 0) {
+      await comparePasswordDummy(password);
       res.status(401).json({ error: 'Email ou mot de passe incorrect' });
       return;
     }
@@ -311,7 +377,8 @@ router.post('/login', rateLimiter(10, 60000), validateBody(loginSchema), async (
 });
 
 // POST /auth/refresh
-router.post('/refresh', async (req, res: Response): Promise<void> => {
+// audit: MED-003 — rate limiter pour limiter le brute-force de la table refresh_tokens.
+router.post('/refresh', rateLimiter(30, 60000), async (req, res: Response): Promise<void> => {
   try {
     const { refreshToken } = req.body;
 
@@ -364,8 +431,41 @@ router.post('/refresh', async (req, res: Response): Promise<void> => {
       return;
     }
 
-    // Marquer le token courant comme consommé (ne pas supprimer → reuse detection)
-    await pool.execute('UPDATE refresh_tokens SET used_at = NOW() WHERE id = ?', [record.id]);
+    // audit: HIGH-001 — consommation ATOMIQUE du token : SET used_at WHERE id=? AND used_at IS NULL.
+    // Deux /auth/refresh concurrents avec le meme token : un seul obtient affectedRows===1 ;
+    // l'autre (affectedRows===0) a perdu la course -> le token vient d'etre consomme en parallele,
+    // ce qui est traite comme une reutilisation et invalide la famille entiere.
+    const [consumeRes] = await pool.execute(
+      'UPDATE refresh_tokens SET used_at = NOW() WHERE id = ? AND used_at IS NULL',
+      [record.id]
+    );
+    if ((consumeRes as any).affectedRows !== 1) {
+      if (record.family_id) {
+        await pool.execute('DELETE FROM refresh_tokens WHERE family_id = ?', [record.family_id]);
+      } else {
+        await pool.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [record.user_id]);
+      }
+      console.warn('[Security] Concurrent refresh token reuse detected for user', record.user_id, '— all sessions invalidated');
+      logAudit('user.logout', {
+        userId: record.user_id,
+        details: { reason: 'refresh_token_reuse_race', familyId: record.family_id ?? null },
+        ip: getIp(req),
+      });
+      res.status(401).json({ error: 'Session invalide, veuillez vous reconnecter' });
+      return;
+    }
+
+    // audit: LOW-009 — propager le family_id existant pour chainer la famille et preserver
+    // la detection de reutilisation. Un family_id NULL est une anomalie de modele (la colonne
+    // devrait etre NOT NULL, cf MIGRATION_SECURITY.sql) : on la loggue et on cree une famille
+    // de secours pour ne pas casser la rotation.
+    let familyIdToUse: string;
+    if (record.family_id) {
+      familyIdToUse = record.family_id;
+    } else {
+      familyIdToUse = uuidv4();
+      console.warn('[Security] refresh token without family_id for user', record.user_id, '— creating fallback family (schema anomaly)');
+    }
 
     const newAccessToken  = generateAccessToken({ userId: record.user_id, email: record.email });
     const newRefreshToken = generateRefreshToken();
@@ -374,7 +474,7 @@ router.post('/refresh', async (req, res: Response): Promise<void> => {
 
     await pool.execute(
       'INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, expires_at) VALUES (?, ?, ?, ?, ?)',
-      [uuidv4(), record.user_id, newRefreshHash, record.family_id ?? uuidv4(), refreshExpires]
+      [uuidv4(), record.user_id, newRefreshHash, familyIdToUse, refreshExpires]
     );
 
     // Nettoyage opportuniste : supprimer les tokens consommés de plus de 30 jours
@@ -393,13 +493,28 @@ router.post('/refresh', async (req, res: Response): Promise<void> => {
 // POST /auth/logout
 router.post('/logout', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { refreshToken } = req.body;
+    const { refreshToken, allDevices } = req.body;
 
-    if (refreshToken) {
+    // audit: LOW-006 — logout fiable : si un refreshToken est fourni, on revoque toute sa
+    // FAMILLE (et plus seulement la ligne presentee), afin qu'aucun token rotatif issu de la
+    // meme session ne reste actif. Optionnellement, allDevices revoque toutes les sessions.
+    if (allDevices) {
+      await pool.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [req.user!.userId]);
+    } else if (refreshToken) {
       const tokenHash = hashToken(refreshToken);
-      await pool.execute('DELETE FROM refresh_tokens WHERE token_hash = ?', [tokenHash]);
+      const [famRows] = await pool.execute(
+        'SELECT family_id FROM refresh_tokens WHERE token_hash = ? AND user_id = ?',
+        [tokenHash, req.user!.userId]
+      );
+      const fam = (famRows as any[])[0];
+      if (fam && fam.family_id) {
+        await pool.execute('DELETE FROM refresh_tokens WHERE family_id = ?', [fam.family_id]);
+      } else {
+        await pool.execute('DELETE FROM refresh_tokens WHERE token_hash = ?', [tokenHash]);
+      }
     }
 
+    // GC opportuniste : supprimer les tokens deja expires de cet utilisateur.
     await pool.execute(
       'DELETE FROM refresh_tokens WHERE user_id = ? AND expires_at < NOW()',
       [req.user!.userId]

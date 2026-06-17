@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { z } from 'zod';
 import pool from '../config/database';
 import { requireAdmin, AuthRequest } from '../middleware/auth';
 import { encrypt } from '../utils/encryption';
@@ -6,6 +7,56 @@ import { testS3Connection, invalidateS3Cache } from '../utils/s3Service';
 import { logAudit } from '../utils/auditLog';
 
 const router = Router();
+
+// audit: MED-014 - allowlist d'hotes S3 https autorises (anti-SSRF).
+// L'endpoint S3 est utilise par testS3Connection (requete sortante) : on n'autorise
+// que des hosts IONOS connus et on rejette tout host prive/loopback.
+const ALLOWED_S3_HOST_SUFFIXES = [
+  '.ionoscloud.com',
+  '.ionos.com',
+  '.ionos.de',
+  '.ionos.fr',
+];
+
+// audit: INFO-016 - echapper les metacaracteres LIKE (\ % _) pour eviter la sur-correspondance
+function escapeLike(input: string): string {
+  return input.replace(/[\\%_]/g, (c) => '\\' + c);
+}
+
+function isPrivateOrLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  if (h === 'localhost' || h === '0.0.0.0' || h.endsWith('.localhost')) return true;
+  // IPv6 loopback / link-local
+  if (h === '::1' || h.startsWith('fe80:') || h.startsWith('fc') || h.startsWith('fd')) return true;
+  // IPv4 ranges privees / loopback / link-local / metadata cloud
+  if (/^127\./.test(h)) return true;
+  if (/^10\./.test(h)) return true;
+  if (/^192\.168\./.test(h)) return true;
+  if (/^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(h)) return true;
+  if (/^169\.254\./.test(h)) return true; // inclut 169.254.169.254 (metadata)
+  return false;
+}
+
+// audit: MED-014 - schema Zod de la config S3 ; endpoint doit etre une URL https
+// pointant vers un host de l'allowlist, non prive/loopback.
+const s3SettingsSchema = z.object({
+  endpoint: z.string().trim().min(1).refine((val) => {
+    try {
+      const u = new URL(val);
+      if (u.protocol !== 'https:') return false;
+      if (isPrivateOrLoopbackHost(u.hostname)) return false;
+      return ALLOWED_S3_HOST_SUFFIXES.some((suf) =>
+        u.hostname === suf.slice(1) || u.hostname.endsWith(suf)
+      );
+    } catch {
+      return false;
+    }
+  }, { message: 'Endpoint S3 invalide (https + host IONOS autorise requis)' }),
+  region: z.string().trim().min(1).max(64),
+  bucket: z.string().trim().min(1).max(255),
+  accessKey: z.string().trim().optional().nullable(),
+  secretKey: z.string().trim().optional().nullable(),
+});
 
 // All admin routes require admin
 router.use(requireAdmin);
@@ -68,8 +119,9 @@ router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
     const params: any[] = [];
 
     if (search) {
-      query += ' AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ?)';
-      const s = '%' + search + '%';
+      // audit: INFO-016 - echapper % _ \ et utiliser ESCAPE pour eviter les jokers injectes
+      query += " AND (first_name LIKE ? ESCAPE '\\\\' OR last_name LIKE ? ESCAPE '\\\\' OR email LIKE ? ESCAPE '\\\\')";
+      const s = '%' + escapeLike(search) + '%';
       params.push(s, s, s);
     }
 
@@ -108,16 +160,46 @@ router.patch('/users/:id', async (req: AuthRequest, res: Response): Promise<void
     const { id } = req.params;
     const { plan, is_admin } = req.body;
 
-    if (plan) {
+    // audit: MED-014 - validation stricte des entrees (pas de validateBody sur cette route)
+    // audit: LOW-045 - rejeter une requete sans champ modifiable (400 au lieu de 200 trompeur)
+    const hasPlan = plan !== undefined;
+    const hasIsAdmin = typeof is_admin === 'number' || typeof is_admin === 'boolean';
+    if (!hasPlan && !hasIsAdmin) {
+      res.status(400).json({ error: 'Aucun champ a modifier (plan ou is_admin)' });
+      return;
+    }
+
+    if (hasPlan) {
       if (!['free', 'pro'].includes(plan)) {
         res.status(400).json({ error: 'Plan invalide (free ou pro)' });
         return;
       }
-      await pool.execute('UPDATE users SET plan = ? WHERE id = ?', [plan, id]);
+      // audit: LOW-045 - 404 si l'utilisateur n'existe pas
+      const [r]: any = await pool.execute('UPDATE users SET plan = ? WHERE id = ?', [plan, id]);
+      if (r.affectedRows === 0) {
+        res.status(404).json({ error: 'Utilisateur non trouve' });
+        return;
+      }
+      // audit: LOW-045/INFO-014 - tracer la modification de plan via l'action admin
+      // dediee (admin.update_user existe desormais dans le type AuditAction, plus de cast).
+      await logAudit('admin.update_user', {
+        userId: req.user!.userId,
+        details: { adminAction: 'update_user_plan', targetUserId: id, plan },
+      });
     }
 
-    if (typeof is_admin === 'number' || typeof is_admin === 'boolean') {
-      await pool.execute('UPDATE users SET is_admin = ? WHERE id = ?', [is_admin ? 1 : 0, id]);
+    if (hasIsAdmin) {
+      const [r]: any = await pool.execute('UPDATE users SET is_admin = ? WHERE id = ?', [is_admin ? 1 : 0, id]);
+      if (r.affectedRows === 0) {
+        res.status(404).json({ error: 'Utilisateur non trouve' });
+        return;
+      }
+      // audit: LOW-045/INFO-014 - tracer toute modification d'elevation de privilege
+      // (admin.update_user existe dans le type AuditAction : cast retire).
+      await logAudit('admin.update_user', {
+        userId: req.user!.userId,
+        details: { adminAction: 'update_user_is_admin', targetUserId: id, is_admin: is_admin ? 1 : 0 },
+      });
     }
 
     res.json({ message: 'Utilisateur mis a jour' });
@@ -138,16 +220,61 @@ router.delete('/users/:id', async (req: AuthRequest, res: Response): Promise<voi
       return;
     }
 
-    // Delete in order: submissions, participants, challenges, events, refresh_tokens, user
-    const [events] = await pool.execute('SELECT id FROM events WHERE user_id = ?', [id]);
-    for (const event of events as any[]) {
-      await pool.execute('DELETE FROM submissions WHERE event_id = ?', [event.id]);
-      await pool.execute('DELETE FROM participants WHERE event_id = ?', [event.id]);
-      await pool.execute('DELETE FROM challenges WHERE event_id = ?', [event.id]);
+    // audit: MED-015 - collecter les cles S3 (photos + branding) AVANT suppression DB
+    const [eventsForKeys] = await pool.execute('SELECT id, logo_key, banner_key FROM events WHERE user_id = ?', [id]);
+    const eventList = eventsForKeys as any[];
+    const s3Keys: string[] = [];
+    for (const ev of eventList) {
+      if (ev.logo_key) s3Keys.push(ev.logo_key);
+      if (ev.banner_key) s3Keys.push(ev.banner_key);
     }
-    await pool.execute('DELETE FROM events WHERE user_id = ?', [id]);
-    await pool.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [id]);
-    await pool.execute('DELETE FROM users WHERE id = ?', [id]);
+    if (eventList.length > 0) {
+      const placeholders = eventList.map(() => '?').join(',');
+      const [subKeys] = await pool.execute(
+        `SELECT photo_key FROM submissions WHERE event_id IN (${placeholders}) AND photo_key IS NOT NULL`,
+        eventList.map(e => e.id)
+      );
+      for (const s of subKeys as any[]) {
+        if (s.photo_key) s3Keys.push(s.photo_key);
+      }
+    }
+
+    // audit: HIGH-013 - encapsuler les DELETE multi-tables dans une transaction
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      // Delete in order: submissions, participants, challenges, events, refresh_tokens, user
+      for (const event of eventList) {
+        await conn.execute('DELETE FROM submissions WHERE event_id = ?', [event.id]);
+        await conn.execute('DELETE FROM participants WHERE event_id = ?', [event.id]);
+        await conn.execute('DELETE FROM challenges WHERE event_id = ?', [event.id]);
+      }
+      await conn.execute('DELETE FROM events WHERE user_id = ?', [id]);
+      await conn.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [id]);
+      await conn.execute('DELETE FROM users WHERE id = ?', [id]);
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
+
+    // audit: MED-015 - nettoyage S3 best-effort apres commit (erreurs seulement loguees)
+    if (s3Keys.length > 0) {
+      const { deleteFromS3 } = require('../utils/s3Service');
+      Promise.all(s3Keys.map((key: string) =>
+        deleteFromS3(key).catch((err: any) => console.error('S3 delete error for', key, err))
+      )).catch(() => {});
+    }
+
+    // audit: INFO-014 - tracer la suppression d'utilisateur via l'action admin dediee
+    // (admin.delete_user existe dans le type AuditAction ; l'ancien 'event.delete' etait
+    // semantiquement incorrect pour une suppression de compte).
+    await logAudit('admin.delete_user', {
+      userId: req.user!.userId,
+      details: { adminAction: 'delete_user', targetUserId: id },
+    });
 
     res.json({ message: 'Utilisateur supprime' });
   } catch (error) {
@@ -247,10 +374,57 @@ router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void>
 router.delete('/events/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    await pool.execute('DELETE FROM submissions WHERE event_id = ?', [id]);
-    await pool.execute('DELETE FROM participants WHERE event_id = ?', [id]);
-    await pool.execute('DELETE FROM challenges WHERE event_id = ?', [id]);
-    await pool.execute('DELETE FROM events WHERE id = ?', [id]);
+
+    // audit: LOW-046 - verifier l'existence avant suppression (404 si inexistant)
+    const [evRows] = await pool.execute('SELECT id, logo_key, banner_key FROM events WHERE id = ?', [id]);
+    if ((evRows as any[]).length === 0) {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
+    const ev = (evRows as any[])[0];
+
+    // audit: MED-015 - collecter les cles S3 (photos + branding) AVANT suppression DB
+    const [subKeys] = await pool.execute(
+      'SELECT photo_key FROM submissions WHERE event_id = ? AND photo_key IS NOT NULL',
+      [id]
+    );
+    const s3Keys: string[] = (subKeys as any[]).map((s: any) => s.photo_key);
+    if (ev.logo_key) s3Keys.push(ev.logo_key);
+    if (ev.banner_key) s3Keys.push(ev.banner_key);
+
+    // audit: HIGH-013 - encapsuler les DELETE multi-tables dans une transaction
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute('DELETE FROM submissions WHERE event_id = ?', [id]);
+      await conn.execute('DELETE FROM participants WHERE event_id = ?', [id]);
+      await conn.execute('DELETE FROM challenges WHERE event_id = ?', [id]);
+      await conn.execute('DELETE FROM events WHERE id = ?', [id]);
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
+
+    // audit: MED-015 - nettoyage S3 best-effort apres commit
+    if (s3Keys.length > 0) {
+      const { deleteFromS3 } = require('../utils/s3Service');
+      Promise.all(s3Keys.map((key: string) =>
+        deleteFromS3(key).catch((err: any) => console.error('S3 delete error for', key, err))
+      )).catch(() => {});
+    }
+
+    // audit: INFO-014 - tracer la suppression d'evenement via l'action admin dediee
+    // (admin.delete_event existe desormais dans le type AuditAction).
+    await logAudit('admin.delete_event', {
+      userId: req.user!.userId,
+      entityType: 'event',
+      entityId: id,
+      details: { adminAction: 'delete_event' },
+    });
+
     res.json({ message: 'Evenement supprime' });
   } catch (error) {
     console.error('Admin delete event error:', error);
@@ -272,21 +446,24 @@ router.get('/settings/s3', async (_req: AuthRequest, res: Response): Promise<voi
 
     const map: Record<string, string> = {};
     for (const s of settings) {
-      // Ne jamais retourner les secrets en clair
-      if (s.setting_key === 's3_access_key' || s.setting_key === 's3_secret_key') {
-        map[s.setting_key] = '????????' + (s.setting_value ? ' (configure)' : '');
-      } else {
-        map[s.setting_key] = s.setting_value;
-      }
+      map[s.setting_key] = s.setting_value;
     }
 
+    // audit: INFO-017 - exposer des booleens de configuration explicites plutot qu'une
+    // chaine masquee non vide systematique (frontend non trompeur), sans fuiter le secret.
+    const accessKeyConfigured = !!map['s3_access_key'];
+    const secretKeyConfigured = !!map['s3_secret_key'];
+
     res.json({
-      configured: settings.length === 5,
+      configured: !!(map['s3_endpoint'] && map['s3_region'] && map['s3_bucket'] && accessKeyConfigured && secretKeyConfigured),
       endpoint: map['s3_endpoint'] || '',
       region: map['s3_region'] || '',
       bucket: map['s3_bucket'] || '',
-      accessKey: map['s3_access_key'] || '',
-      secretKey: map['s3_secret_key'] || '',
+      // Ne jamais retourner les secrets en clair : seulement un indicateur masque
+      accessKey: accessKeyConfigured ? '???????? (configure)' : '',
+      secretKey: secretKeyConfigured ? '???????? (configure)' : '',
+      accessKeyConfigured,
+      secretKeyConfigured,
     });
   } catch (error) {
     console.error('Admin get S3 settings error:', error);
@@ -297,25 +474,27 @@ router.get('/settings/s3', async (_req: AuthRequest, res: Response): Promise<voi
 // PUT /admin/settings/s3 ? Met a jour la config S3 (chiffre les secrets)
 router.put('/settings/s3', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { endpoint, region, bucket, accessKey, secretKey } = req.body;
-
-    if (!endpoint || !region || !bucket) {
-      res.status(400).json({ error: 'Endpoint, region et bucket sont obligatoires' });
+    // audit: MED-014 - valider req.body via Zod (endpoint = URL https allowlistee anti-SSRF)
+    const parsed = s3SettingsSchema.safeParse(req.body);
+    if (!parsed.success) {
+      const details = parsed.error.issues.map((e) => e.path.join('.') + ': ' + e.message);
+      res.status(400).json({ error: 'Donnees invalides', details });
       return;
     }
+    const { endpoint, region, bucket, accessKey, secretKey } = parsed.data;
 
-    // Upsert endpoint, region, bucket (toujours)
+    // Upsert endpoint, region, bucket (toujours) - valeurs deja trim()ees par Zod
     const settings: { key: string; value: string }[] = [
-      { key: 's3_endpoint', value: endpoint.trim() },
-      { key: 's3_region', value: region.trim() },
-      { key: 's3_bucket', value: bucket.trim() },
+      { key: 's3_endpoint', value: endpoint },
+      { key: 's3_region', value: region },
+      { key: 's3_bucket', value: bucket },
     ];
 
     // Les secrets ne sont mis a jour que si remplis (sinon on garde les anciens)
     if (accessKey && secretKey) {
       settings.push(
-        { key: 's3_access_key', value: encrypt(accessKey.trim()) },
-        { key: 's3_secret_key', value: encrypt(secretKey.trim()) },
+        { key: 's3_access_key', value: encrypt(accessKey) },
+        { key: 's3_secret_key', value: encrypt(secretKey) },
       );
     } else if (accessKey || secretKey) {
       res.status(400).json({ error: 'Remplissez les deux cles ou aucune' });
@@ -404,16 +583,9 @@ router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): 
       return;
     }
 
-    // Set response headers for ZIP download
-    const zipName = event.code + '_' + event.name.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30) + '.zip';
-    res.setHeader('Content-Type', 'application/zip');
-    res.setHeader('Content-Disposition', 'attachment; filename="' + zipName + '"');
-
-    // Create ZIP stream
-    const archive = archiver('zip', { zlib: { level: 5 } });
-    archive.pipe(res);
-
-    // Add each photo to the ZIP
+    // audit: LOW-047 - pre-recuperer les objets S3 AVANT d'envoyer les headers, afin de
+    // pouvoir repondre 502 si rien n'est recuperable (au lieu d'un ZIP vide en 200).
+    const fetched: { folder: string; fileName: string; body: any }[] = [];
     for (const sub of subs) {
       try {
         const command = new GetObjectCommand({
@@ -421,16 +593,37 @@ router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): 
           Key: sub.photo_key,
         });
         const s3Response = await client.send(command);
-
         if (s3Response.Body) {
-          // Folder structure: challenge_title/participant_name.webp
           const folder = sub.challenge_title.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 40);
           const fileName = sub.participant_name.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 30) + '.webp';
-          archive.append(s3Response.Body, { name: folder + '/' + fileName });
+          fetched.push({ folder, fileName, body: s3Response.Body });
         }
       } catch (err) {
         console.error('Failed to fetch S3 object:', sub.photo_key, err);
       }
+    }
+
+    if (fetched.length === 0) {
+      res.status(502).json({ error: 'Impossible de recuperer les photos depuis S3' });
+      return;
+    }
+
+    // Set response headers for ZIP download
+    const zipName = event.code + '_' + event.name.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 30) + '.zip';
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', 'attachment; filename="' + zipName + '"');
+
+    // Create ZIP stream
+    const archive = archiver('zip', { zlib: { level: 5 } });
+    // audit: LOW-047 - ecouter les erreurs d'archive pour ne pas laisser la reponse pendante
+    archive.on('error', (err: Error) => {
+      console.error('Admin ZIP archive error:', err);
+      if (!res.headersSent) res.status(500).json({ error: 'Erreur ZIP' });
+    });
+    archive.pipe(res);
+
+    for (const f of fetched) {
+      archive.append(f.body, { name: f.folder + '/' + f.fileName });
     }
 
     await archive.finalize();
@@ -462,12 +655,16 @@ router.get('/audit-logs', async (req: AuthRequest, res: Response): Promise<void>
       params.push(userId);
     }
     if (action) {
-      query += ' AND a.action LIKE ?';
-      params.push('%' + action + '%');
+      // audit: INFO-016 - echapper les metacaracteres LIKE
+      query += " AND a.action LIKE ? ESCAPE '\\\\'";
+      params.push('%' + escapeLike(action) + '%');
     }
 
-    query += ' ORDER BY a.created_at DESC LIMIT ? OFFSET ?';
-    params.push(limit, offset);
+    // audit: LOW-049 - interpoler directement les entiers DEJA valides (parseInt + clamp)
+    // car mysql2 lie LIMIT/OFFSET en strings -> 'Incorrect arguments to mysqld_stmt_execute'.
+    const safeLimit = Number.isFinite(limit) ? limit : 50;
+    const safeOffset = Number.isFinite(offset) ? offset : 0;
+    query += ` ORDER BY a.created_at DESC LIMIT ${safeLimit} OFFSET ${safeOffset}`;
 
     const [rows] = await pool.execute(query, params);
     res.json(rows);
@@ -480,8 +677,12 @@ router.get('/audit-logs', async (req: AuthRequest, res: Response): Promise<void>
 // GET /admin/affiliates - Overview of referral program
 router.get('/affiliates', async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
+    // audit: INFO-015 - COALESCE(SUM(CASE ...)) pour eviter NULL et la dependance au sql_mode
     const [totals] = await pool.execute(
-      `SELECT COUNT(*) as total, SUM(status='converted') as converted, SUM(status='rewarded') as rewarded FROM referrals`
+      `SELECT COUNT(*) as total,
+              COALESCE(SUM(CASE WHEN status='converted' THEN 1 ELSE 0 END), 0) as converted,
+              COALESCE(SUM(CASE WHEN status='rewarded' THEN 1 ELSE 0 END), 0) as rewarded
+       FROM referrals`
     );
     const [topReferrers] = await pool.execute(
       `SELECT u.id, u.first_name, u.last_name, u.email, COUNT(r.id) as referred_count
@@ -503,14 +704,21 @@ router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Pro
   try {
     const { userId } = req.params;
 
+    // audit: HIGH-012 - lire aussi is_admin pour interdire d'impersonner un admin
     const [rows] = await pool.execute(
-      'SELECT id, email, first_name, last_name, plan FROM users WHERE id = ?',
+      'SELECT id, email, first_name, last_name, plan, is_admin FROM users WHERE id = ?',
       [userId]
     );
     const user = (rows as any[])[0];
 
     if (!user) {
       res.status(404).json({ error: 'Utilisateur non trouve' });
+      return;
+    }
+
+    // audit: HIGH-012 - interdire l'impersonation d'un compte admin (escalade laterale)
+    if (user.is_admin) {
+      res.status(403).json({ error: 'Impossible d\'impersonner un administrateur' });
       return;
     }
 
@@ -522,11 +730,15 @@ router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Pro
     const refreshToken = generateRefreshToken();
     const hashedRefresh = hashToken(refreshToken);
 
+    // audit: HIGH-012 - TTL court (1h) + marquage impersonated_by pour audit/revocation,
+    // au lieu d'un refresh token persistant 30j independant de la session admin.
     await pool.execute(
-      'INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at) VALUES (?, ?, ?, DATE_ADD(NOW(), INTERVAL 30 DAY))',
-      [uuidv4(), user.id, hashedRefresh]
+      'INSERT INTO refresh_tokens (id, user_id, token_hash, impersonated_by, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+      [uuidv4(), user.id, hashedRefresh, adminId]
     );
 
+    // audit: INFO-014 - 'admin.impersonate' fait desormais partie du type AuditAction
+    // (ajoute dans utils/auditLog.ts), le cast 'as any' n'est plus necessaire.
     await logAudit('admin.impersonate', {
       userId: adminId,
       details: { targetUserId: user.id, targetEmail: user.email },
@@ -561,9 +773,41 @@ router.delete('/participants/:id', async (req: AuthRequest, res: Response): Prom
       return;
     }
 
-    // Delete their submissions first, then the participant
-    await pool.execute('DELETE FROM submissions WHERE participant_id = ?', [id]);
-    await pool.execute('DELETE FROM participants WHERE id = ?', [id]);
+    // audit: MED-015 - collecter les cles S3 des soumissions AVANT suppression DB
+    const [subKeys] = await pool.execute(
+      'SELECT photo_key FROM submissions WHERE participant_id = ? AND photo_key IS NOT NULL',
+      [id]
+    );
+    const s3Keys: string[] = (subKeys as any[]).map((s: any) => s.photo_key);
+
+    // audit: HIGH-013 - transaction pour la suppression multi-tables
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      // Delete their submissions first, then the participant
+      await conn.execute('DELETE FROM submissions WHERE participant_id = ?', [id]);
+      await conn.execute('DELETE FROM participants WHERE id = ?', [id]);
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
+
+    // audit: MED-015 - nettoyage S3 best-effort apres commit
+    if (s3Keys.length > 0) {
+      const { deleteFromS3 } = require('../utils/s3Service');
+      Promise.all(s3Keys.map((key: string) =>
+        deleteFromS3(key).catch((err: any) => console.error('S3 delete error for', key, err))
+      )).catch(() => {});
+    }
+
+    // audit: INFO-014 - tracer la suppression de participant (action admin mutatrice)
+    await logAudit('admin.delete_participant', {
+      userId: req.user!.userId,
+      details: { adminAction: 'delete_participant', participantId: id },
+    });
 
     res.json({ message: 'Participant supprime' });
   } catch (error) {

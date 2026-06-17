@@ -22,6 +22,8 @@ export default function LoginPage() {
       await login(email, password);
       router.push('/dashboard');
     } catch (err: any) {
+      // TODO(audit:LOW-076): garantir des messages d'auth generiques cote backend (anti-enumeration).
+      // L'enforcement reel doit etre cote API ; on conserve ici un fallback generique.
       setError(err.response?.data?.error || 'Erreur de connexion');
     } finally {
       setLoading(false);

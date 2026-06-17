@@ -14,12 +14,16 @@ export default function VerifyPendingPage() {
   const [error, setError] = useState('');
 
   // Poll every 5s to check if email was verified
+  // audit: LOW-074 — arreter le polling des que emailVerified devient true (le redirect effect
+  // ci-dessous prend le relais), pour ne pas continuer a interroger /auth/me indefiniment.
   useEffect(() => {
-    const interval = setInterval(async () => {
-      await refreshUser();
+    if (user?.emailVerified) return;
+    const interval = setInterval(() => {
+      // refreshUser avale ses erreurs en interne ; on relance simplement a chaque tick.
+      refreshUser();
     }, 5000);
     return () => clearInterval(interval);
-  }, [refreshUser]);
+  }, [refreshUser, user?.emailVerified]);
 
   // Redirect to dashboard once verified
   useEffect(() => {

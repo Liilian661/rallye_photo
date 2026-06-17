@@ -17,8 +17,11 @@ export const loginSchema = z.object({
 export const createEventSchema = z.object({
   name:        z.string().min(1).max(255).trim(),
   description: z.string().max(2000).optional().nullable(),
-  eventDate:   z.string().optional().nullable(),
-  deadline:    z.string().optional().nullable(),
+  // audit: LOW-051 — valide le format date-time ISO 8601 (le panel envoie
+  // deja des chaines .toISOString()), au lieu d'accepter toute chaine pouvant
+  // produire une deadline non parsable en base.
+  eventDate:   z.string().datetime().optional().nullable(),
+  deadline:    z.string().datetime().optional().nullable(),
   scoringMode: z.enum(['winner', 'participation']).optional().default('winner'),
   teamMode:    z.boolean().optional().default(false),
 });
@@ -33,5 +36,8 @@ export const createChallengeSchema = z.object({
 export const joinEventSchema = z.object({
   name: z.string().min(1).max(100).trim(),
   deviceId: z.string().max(255).optional().nullable(),
-  teamId: z.string().max(36).optional().nullable(),
+  // audit: LOW-051 — teamId est un identifiant de team (UUID) : valide le
+  // format UUID plutot qu'une chaine arbitraire de max 36. Reste optionnel
+  // (events sans team) — null/undefined acceptes.
+  teamId: z.string().uuid().optional().nullable(),
 });

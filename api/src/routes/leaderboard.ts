@@ -14,6 +14,9 @@ router.get('/events/:eventId/leaderboard', async (req, res: Response): Promise<v
     let query: string;
 
     if (scoringMode === 'participation') {
+      // audit: LOW-044 - COUNT(DISTINCT challenge) pour eviter le sur-comptage
+      // si plusieurs soumissions existent pour un meme (participant, challenge).
+      // En mode participation, 'wins' = nombre de defis releves (semantique assumee).
       query = `SELECT
         p.id,
         p.name,
@@ -21,8 +24,8 @@ router.get('/events/:eventId/leaderboard', async (req, res: Response): Promise<v
         t.name as team_name,
         t.color as team_color,
         COALESCE(SUM(c.points), 0) as total_points,
-        COUNT(s.id) as total_submissions,
-        COUNT(s.id) as wins
+        COUNT(DISTINCT s.challenge_id) as total_submissions,
+        COUNT(DISTINCT s.challenge_id) as wins
        FROM participants p
        LEFT JOIN submissions s ON s.participant_id = p.id AND s.event_id = ?
        LEFT JOIN challenges c ON c.id = s.challenge_id

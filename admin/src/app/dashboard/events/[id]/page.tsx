@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
-import { IconArrowLeft, IconX, IconChevronLeft, IconChevronRight, IconDownload } from '@/lib/icons';
+import { IconArrowLeft, IconX, IconDownload } from '@/lib/icons';
 
 interface EventDetail {
   id: string;
@@ -57,11 +57,9 @@ export default function AdminEventDetailPage() {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'photos' | 'participants'>('photos');
 
-  useEffect(() => {
-    loadData();
-  }, [eventId]);
-
-  const loadData = async () => {
+  // audit: INFO-026 — loadData memoise via useCallback([eventId]) et inclus dans les deps du
+  // useEffect (coherent avec events/page.tsx et users/page.tsx ; respecte exhaustive-deps).
+  const loadData = useCallback(async () => {
     try {
       const { data } = await api.get(`/admin/events/${eventId}`);
       setEvent(data.event);
@@ -73,7 +71,25 @@ export default function AdminEventDetailPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, [eventId]);
+
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  // audit: INFO-027 — pre-calculer un index Map<participant_id, {count, wins}> via useMemo
+  // plutot que de refaire submissions.filter(...) pour chaque participant a chaque render
+  // (complexite O(participants*submissions) recalculee inutilement).
+  const participantStats = useMemo(() => {
+    const stats = new Map<string, { count: number; wins: number }>();
+    for (const s of submissions) {
+      const entry = stats.get(s.participant_id) || { count: 0, wins: 0 };
+      entry.count += 1;
+      if (s.is_winner) entry.wins += 1;
+      stats.set(s.participant_id, entry);
+    }
+    return stats;
+  }, [submissions]);
 
   const downloadZip = async () => {
     setDownloading(true);
@@ -84,13 +100,19 @@ export default function AdminEventDetailPage() {
       });
 
       const url = window.URL.createObjectURL(new Blob([response.data]));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = (event?.code || 'event') + '_photos.zip';
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      window.URL.revokeObjectURL(url);
+      try {
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = (event?.code || 'event') + '_photos.zip';
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } finally {
+        // audit: INFO-028 / LOW-077 — revoquer l'objectURL dans un finally (jamais fuite, meme si
+        // a.click() leve) et de facon differee : revoquer juste apres click() peut faire echouer
+        // le telechargement sur certains navigateurs.
+        setTimeout(() => window.URL.revokeObjectURL(url), 1000);
+      }
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur lors du telechargement');
     } finally {
@@ -138,6 +160,7 @@ export default function AdminEventDetailPage() {
       <img
         src={previewUrl}
         alt="Preview"
+        referrerPolicy="no-referrer" /* audit: LOW-085 — ne pas fuiter le Referer vers S3 */
         style={{
           maxWidth: '90%',
           maxHeight: '90vh',
@@ -322,6 +345,7 @@ export default function AdminEventDetailPage() {
                             src={sub.photo_url}
                             alt={sub.participant_name}
                             loading="lazy"
+                            referrerPolicy="no-referrer" /* audit: LOW-085 — pas de fuite Referer vers S3 */
                             onClick={() => setPreviewUrl(sub.photo_url)}
                             style={{
                               width: '100%',
@@ -383,12 +407,13 @@ export default function AdminEventDetailPage() {
               </thead>
               <tbody>
                 {participants.map((p) => {
-                  const pSubs = submissions.filter(s => s.participant_id === p.id);
-                  const pWins = pSubs.filter(s => s.is_winner).length;
+                  // audit: INFO-027 — lecture O(1) depuis l'index memoise au lieu d'un filter par ligne.
+                  const pStat = participantStats.get(p.id) || { count: 0, wins: 0 };
+                  const pWins = pStat.wins;
                   return (
                     <tr key={p.id}>
                       <td style={{ fontWeight: 500 }}>{p.name}</td>
-                      <td style={{ textAlign: 'center' }}>{pSubs.length}</td>
+                      <td style={{ textAlign: 'center' }}>{pStat.count}</td>
                       <td style={{ textAlign: 'center' }}>
                         {pWins > 0 ? (
                           <span style={{ color: 'var(--rp-accent)', fontWeight: 700 }}>{pWins}</span>
