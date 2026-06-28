@@ -421,7 +421,7 @@ router.delete('/events/:id', async (req: AuthRequest, res: Response): Promise<vo
     await logAudit('admin.delete_event', {
       userId: req.user!.userId,
       entityType: 'event',
-      entityId: id,
+      entityId: id as string,
       details: { adminAction: 'delete_event' },
     });
 
