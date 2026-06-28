@@ -9,5 +9,6 @@ dist/
 # Exception : le gabarit sans secret reste versionne.
 !.env.example
 
+*.tsbuildinfo
 *.log
 .pm2/
