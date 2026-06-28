@@ -55,9 +55,14 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
   useEffect(() => { setOpen(false); }, [pathname]);
 
   const logout = async () => {
+    // Toujours appeler l'API — le cookie HttpOnly refreshToken est envoyé via withCredentials.
+    // Pour les anciennes sessions (adminRefreshToken en js-cookie), on l'envoie aussi dans le body.
+    const legacyRefreshToken = Cookies.get('adminRefreshToken');
     try {
-      const refreshToken = Cookies.get('adminRefreshToken');
-      if (refreshToken) await api.post('/auth/logout', { refreshToken });
+      await Promise.race([
+        api.post('/auth/logout', legacyRefreshToken ? { refreshToken: legacyRefreshToken } : {}),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+      ]);
     } catch { /* ignorer l'erreur réseau, on déconnecte quand même */ }
     Cookies.remove('adminAccessToken');
     Cookies.remove('adminRefreshToken');

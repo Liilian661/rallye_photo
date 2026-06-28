@@ -118,19 +118,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const logout = async () => {
-    // audit: LOW-072 — attendre la revocation backend (avec timeout) AVANT de purger les cookies
-    // et de naviguer, sinon la navigation full-page peut interrompre la requete XHR et laisser le
-    // refreshToken valide cote serveur 30j. On borne l'attente pour ne pas bloquer l'UI.
-    const refreshToken = Cookies.get('refreshToken');
-    if (refreshToken) {
-      try {
-        await Promise.race([
-          api.post('/auth/logout', { refreshToken }),
-          new Promise((resolve) => setTimeout(resolve, 2000)),
-        ]);
-      } catch {
-        // best-effort : on purge quand meme localement
-      }
+    // Toujours appeler l'API pour révoquer le refreshToken côté serveur.
+    // Pour les sessions HttpOnly, le cookie est envoyé automatiquement (withCredentials) — pas besoin du body.
+    // Pour les anciennes sessions (js-cookie), on l'envoie aussi dans le body (backward compat).
+    const legacyRefreshToken = Cookies.get('refreshToken');
+    try {
+      await Promise.race([
+        api.post('/auth/logout', legacyRefreshToken ? { refreshToken: legacyRefreshToken } : {}),
+        new Promise((resolve) => setTimeout(resolve, 2000)),
+      ]);
+    } catch {
+      // best-effort : on purge quand même localement
     }
     Cookies.remove('accessToken');
     Cookies.remove('refreshToken');
