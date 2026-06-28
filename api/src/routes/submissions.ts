@@ -276,7 +276,7 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
 // Accepte JWT organisateur (doit posséder l'event) OU token participant (doit appartenir à l'event)
 router.get('/events/:eventId/submissions', requireAuthOrParticipant, async (req: DualAuthRequest, res: Response): Promise<void> => {
   try {
-    const eventId = req.params.eventId;
+    const eventId = req.params.eventId as string;
 
     // Vérifier l'appartenance : organisateur doit posséder l'event, participant doit être membre
     if (req.user) {

@@ -135,7 +135,7 @@ router.get('/join/:code', rateLimiter(30, 60000), async (req, res: Response): Pr
 
     const [rows] = await pool.execute(
       'SELECT id, name, description, event_date, deadline, code, gallery_enabled, team_mode, theme_color, logo_key, banner_key, photo_secret, status, tier FROM events WHERE code = ?',
-      [code.toUpperCase()]
+      [(code as string).toUpperCase()]
     );
     const events = rows as any[];
 
