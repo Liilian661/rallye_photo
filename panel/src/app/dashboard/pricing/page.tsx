@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { IconCheck, IconX } from '@/lib/icons';
@@ -70,7 +70,7 @@ const plans = [
   },
 ];
 
-export default function PricingPage() {
+function PricingContent() {
   const { user, refreshUser } = useAuth();
   const searchParams  = useSearchParams();
   const currentPlan   = user?.plan || 'free';
@@ -347,5 +347,13 @@ export default function PricingPage() {
         </a>
       </div>
     </div>
+  );
+}
+
+export default function PricingPage() {
+  return (
+    <Suspense>
+      <PricingContent />
+    </Suspense>
   );
 }
