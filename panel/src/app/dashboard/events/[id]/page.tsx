@@ -821,7 +821,7 @@ export default function EventDetailPage() {
                                   )}
                                   <div style={{ padding: '8px 10px' }}>
                                     <p style={{ fontSize: 12, fontWeight: 600, color: 'var(--rp-text-primary)', marginBottom: 4 }}>{sub.participant_name}</p>
-                                    {event.scoring_mode !== 'participation' && isPastDeadline && !winner && !challenge.vote_enabled && (
+                                    {event.scoring_mode !== 'participation' && isPastDeadline && !winner && (
                                       <button onClick={() => selectWinner(challenge.id, sub.id)} style={{
                                         width: '100%', padding: '4px 8px', borderRadius: 6, border: 'none',
                                         background: 'var(--rp-accent)', color: 'var(--rp-accent-text)',
