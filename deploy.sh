@@ -62,8 +62,10 @@ else
 fi
 
 # ------------------------------------------------------------------
-# 2. Builds (un echec de build avorte tout grace a set -e, AVANT le restart).
+# 2. Install deps + Builds (un echec avorte tout grace a set -e, AVANT le restart).
 # ------------------------------------------------------------------
+echo "Install deps API..."
+cd "$DEPLOY_ROOT/api" && npm ci --omit=dev=false && cd "$DEPLOY_ROOT"
 echo "Build API..."
 cd "$DEPLOY_ROOT/api" && npm run build && cd "$DEPLOY_ROOT"
 echo "Build Panel..."
