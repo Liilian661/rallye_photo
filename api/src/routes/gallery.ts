@@ -99,7 +99,7 @@ router.get('/:eventId/gallery', async (req, res: Response): Promise<void> => {
     const photoList = photos as any[];
     for (const photo of photoList) {
       if (photo.photo_key && event.photo_secret) {
-        const token = signPhotoToken(photo.photo_key, eventId, event.photo_secret, 3600);
+        const token = await signPhotoToken(photo.photo_key, eventId, event.photo_secret, 3600);
         photo.photo_url = apiBase + '/photos/' + token;
       }
     }

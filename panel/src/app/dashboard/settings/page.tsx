@@ -17,15 +17,18 @@ export default function SettingsPage() {
   const [referralState, setReferralState] = useState<'loading' | 'ready' | 'error'>('loading');
 
   useEffect(() => {
-    api.get('/affiliates/me')
+    const ctrl = new AbortController();
+    api.get('/affiliates/me', { signal: ctrl.signal })
       .then(({ data }) => {
         setReferralLink(data.referralLink);
         setReferralCode(data.referralCode);
         setReferralState('ready');
       })
-      .catch(() => {
+      .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
         setReferralState('error'); // audit: INFO-031 — surface l'echec reseau
       });
+    return () => ctrl.abort();
   }, []);
 
   const copyLink = () => {

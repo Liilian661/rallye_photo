@@ -227,7 +227,7 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
 
     // Generer un token securise
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
-    const photoToken = signPhotoToken(s3Key, eventId, event.photo_secret, 86400);
+    const photoToken = await signPhotoToken(s3Key, eventId, event.photo_secret, 86400);
     const photoUrl = apiBase + '/photos/' + photoToken;
 
     // audit: LOW-039 — is_winner determine directement dans l'INSERT (atomique),
@@ -303,7 +303,7 @@ router.get('/events/:eventId/submissions', requireAuthOrParticipant, async (req:
     const submissions = rows as any[];
     for (const sub of submissions) {
       if (eventSecret && sub.photo_key) {
-        const token = signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
+        const token = await signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
         sub.photo_url = apiBase + '/photos/' + token;
       }
       delete sub.photo_key;
@@ -349,7 +349,7 @@ router.get('/challenges/:challengeId/submissions', requireAuth, async (req: Auth
     const submissions = rows as any[];
     for (const sub of submissions) {
       if (eventSecret && eventId && sub.photo_key) {
-        const token = signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
+        const token = await signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
         sub.photo_url = apiBase + '/photos/' + token;
       }
     }

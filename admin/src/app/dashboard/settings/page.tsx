@@ -29,19 +29,22 @@ export default function SettingsPage() {
   const [isConfigured, setIsConfigured] = useState(false);
 
   useEffect(() => {
-    loadConfig();
+    const ctrl = new AbortController();
+    loadConfig(ctrl.signal);
+    return () => ctrl.abort();
   }, []);
 
-  const loadConfig = async () => {
+  const loadConfig = async (signal?: AbortSignal) => {
     try {
-      const { data } = await api.get<S3Config>('/admin/settings/s3');
+      const { data } = await api.get<S3Config>('/admin/settings/s3', { signal });
       setEndpoint(data.endpoint);
       setRegion(data.region);
       setBucket(data.bucket);
       setIsConfigured(data.configured);
       setAccessKey('');
       setSecretKey('');
-    } catch {
+    } catch (err: any) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       // Pas de config existante
     } finally {
       setLoading(false);

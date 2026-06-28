@@ -192,7 +192,7 @@ export default function EventDetailPage() {
       setNewDesc('');
       setNewPoints(10);
       setShowAddChallenge(false);
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }
@@ -201,7 +201,7 @@ export default function EventDetailPage() {
   const selectWinner = async (challengeId: string, submissionId: string) => {
     try {
       await api.post(`/challenges/${challengeId}/winner/${submissionId}`);
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }
@@ -220,7 +220,7 @@ export default function EventDetailPage() {
     if (!confirm('Supprimer ce defi ?')) return;
     try {
       await api.delete(`/challenges/${challengeId}`);
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }
@@ -241,7 +241,7 @@ export default function EventDetailPage() {
     try {
       const { data } = await api.post(`/events/${eventId}/notify-challenges`);
       alert(data.count + ' defi(s) notifie(s) aux participants !');
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     } finally {
@@ -288,7 +288,7 @@ export default function EventDetailPage() {
         themeColor: editThemeColor,
       });
       setShowEditModal(false);
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur lors de la modification');
     } finally {
@@ -302,7 +302,7 @@ export default function EventDetailPage() {
       await api.post(`/events/${eventId}/teams`, { name: newTeamName.trim(), color: newTeamColor });
       setNewTeamName('');
       setShowAddTeam(false);
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }
@@ -312,7 +312,7 @@ export default function EventDetailPage() {
     if (!confirm('Supprimer cette equipe ?')) return;
     try {
       await api.delete(`/teams/${teamId}`);
-      loadData();
+      loadData().catch(console.error);
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }
@@ -940,7 +940,7 @@ export default function EventDetailPage() {
                     <button onClick={async () => {
                       try {
                         await api.delete(`/events/${event.id}/logo`);
-                        loadData();
+                        loadData().catch(console.error);
                       } catch { alert('Erreur'); }
                     }} className="btn-ghost" style={{ fontSize: 11, color: 'var(--rp-danger-text)' }}>Supprimer</button>
                   </div>
@@ -962,7 +962,7 @@ export default function EventDetailPage() {
                       const formData = new FormData();
                       formData.append('logo', file);
                       await api.post(`/events/${event.id}/logo`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-                      loadData();
+                      loadData().catch(console.error);
                       alert('Logo mis a jour !');
                     } catch (err: any) {
                       alert(err.response?.data?.error || 'Erreur upload');
@@ -985,7 +985,7 @@ export default function EventDetailPage() {
                     <button onClick={async () => {
                       try {
                         await api.delete(`/events/${event.id}/banner`);
-                        loadData();
+                        loadData().catch(console.error);
                       } catch { alert('Erreur'); }
                     }} className="btn-ghost" style={{ fontSize: 11, color: 'var(--rp-danger-text)' }}>Supprimer</button>
                   </div>
@@ -1007,7 +1007,7 @@ export default function EventDetailPage() {
                       const formData = new FormData();
                       formData.append('banner', file);
                       await api.post(`/events/${event.id}/banner`, formData, { headers: { 'Content-Type': 'multipart/form-data' } });
-                      loadData();
+                      loadData().catch(console.error);
                       alert('Banniere mise a jour !');
                     } catch (err: any) {
                       alert(err.response?.data?.error || 'Erreur upload');

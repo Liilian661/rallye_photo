@@ -154,18 +154,22 @@ router.get('/join/:code', rateLimiter(30, 60000), async (req, res: Response): Pr
       return;
     }
 
+    const apiBaseJoin = process.env.API_URL || 'https://api.rallye-photo.com';
+    const logoUrlJoin = event.logo_key && event.photo_secret
+      ? apiBaseJoin + '/photos/' + await signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
+      : null;
+    const bannerUrlJoin = event.banner_key && event.photo_secret
+      ? apiBaseJoin + '/photos/' + await signPhotoToken(event.banner_key, event.id, event.photo_secret, 86400)
+      : null;
+
     res.json({
       id: event.id, name: event.name, description: event.description,
       eventDate: event.event_date, deadline: event.deadline, code: event.code,
       galleryEnabled: event.gallery_enabled, team_mode: event.team_mode,
       theme_color: event.theme_color,
       tier: event.tier || 'free',
-      logo_url: event.logo_key && event.photo_secret
-        ? (process.env.API_URL || 'https://api.rallye-photo.com') + '/photos/' + signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
-        : null,
-      banner_url: event.banner_key && event.photo_secret
-        ? (process.env.API_URL || 'https://api.rallye-photo.com') + '/photos/' + signPhotoToken(event.banner_key, event.id, event.photo_secret, 86400)
-        : null,
+      logo_url: logoUrlJoin,
+      banner_url: bannerUrlJoin,
       status: event.status,
     });
   } catch (error) {
@@ -201,14 +205,16 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
     const { photo_secret, ...eventPublic } = event;
 
     // audit: HIGH-009 - on diffuse eventPublic (sans photo_secret), pas event
+    const logoUrl = event.logo_key && event.photo_secret
+      ? apiBase + '/photos/' + await signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
+      : null;
+    const bannerUrl = event.banner_key && event.photo_secret
+      ? apiBase + '/photos/' + await signPhotoToken(event.banner_key, event.id, event.photo_secret, 86400)
+      : null;
     const result = {
       ...eventPublic,
-      logo_url: event.logo_key && event.photo_secret
-        ? apiBase + '/photos/' + signPhotoToken(event.logo_key, event.id, event.photo_secret, 86400)
-        : null,
-      banner_url: event.banner_key && event.photo_secret
-        ? apiBase + '/photos/' + signPhotoToken(event.banner_key, event.id, event.photo_secret, 86400)
-        : null,
+      logo_url: logoUrl,
+      banner_url: bannerUrl,
     };
 
     res.json(result);
@@ -564,7 +570,7 @@ router.post('/:id/logo', requireAuth, brandingUpload.single('logo'), async (req:
     await pool.execute('UPDATE events SET logo_key = ? WHERE id = ?', [key, req.params.id]);
 
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
-    const url = apiBase + '/photos/' + signPhotoToken(key, event.id, event.photo_secret, 86400);
+    const url = apiBase + '/photos/' + await signPhotoToken(key, event.id, event.photo_secret, 86400);
     res.json({ logo_url: url });
   } catch (error) {
     console.error('Logo upload error:', error);
@@ -592,7 +598,7 @@ router.post('/:id/banner', requireAuth, brandingUpload.single('banner'), async (
     await pool.execute('UPDATE events SET banner_key = ? WHERE id = ?', [key, req.params.id]);
 
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
-    const url = apiBase + '/photos/' + signPhotoToken(key, event.id, event.photo_secret, 86400);
+    const url = apiBase + '/photos/' + await signPhotoToken(key, event.id, event.photo_secret, 86400);
     res.json({ banner_url: url });
   } catch (error) {
     console.error('Banner upload error:', error);

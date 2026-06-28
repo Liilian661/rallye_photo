@@ -66,7 +66,7 @@ router.get('/:token', rateLimiter(120, 60000), async (req: Request, res: Respons
     // Verifier le token completement
     // audit: LOW-003 / LOW-036 — on passe decoded.e comme expectedEventId : verifyPhotoToken
     // rejette si l'eventId signe (verified.e) differe de celui ayant servi a resoudre le secret.
-    const result = verifyPhotoToken(token, secret, decoded.e);
+    const result = await verifyPhotoToken(token, secret, decoded.e);
     if (!result) {
       res.status(403).json({ error: 'Token expire ou invalide' });
       return;

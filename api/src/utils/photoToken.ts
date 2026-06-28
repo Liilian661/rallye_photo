@@ -1,5 +1,8 @@
 import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
+import { promisify } from 'util';
+
+const pbkdf2 = promisify(crypto.pbkdf2);
 
 // Pepper global - ne change jamais, stocke dans l'env
 const PHOTO_PEPPER = process.env.PHOTO_PEPPER;
@@ -17,36 +20,37 @@ export function generateEventPhotoSecret(): string {
 
 /**
  * Derive une cle de signature a partir du secret event + pepper + salt
- * Utilise PBKDF2 avec 100k iterations
+ * Utilise PBKDF2 avec 100k iterations (async — ne bloque pas l'event loop)
  */
-function deriveSigningKey(eventSecret: string, salt: string): string {
-  return crypto.pbkdf2Sync(
+async function deriveSigningKey(eventSecret: string, salt: string): Promise<string> {
+  const key = await pbkdf2(
     eventSecret + PHOTO_PEPPER,
     salt,
     100000,
     64,
     'sha512'
-  ).toString('hex');
+  );
+  return key.toString('hex');
 }
 
 /**
  * Signe un token photo pour une image donnee
  */
-export function signPhotoToken(
+export async function signPhotoToken(
   photoKey: string,
   eventId: string,
   eventSecret: string,
   expiresInSeconds: number = 86400 // 24h par defaut
-): string {
+): Promise<string> {
   // Salt unique par token
   const salt = crypto.randomBytes(16).toString('hex');
-  
-  // Derive la cle de signature
-  const signingKey = deriveSigningKey(eventSecret, salt);
-  
+
+  // Derive la cle de signature (async)
+  const signingKey = await deriveSigningKey(eventSecret, salt);
+
   // Nonce anti-replay
   const nonce = crypto.randomBytes(8).toString('hex');
-  
+
   const payload = {
     k: photoKey,    // photo_key S3
     e: eventId,     // event_id
@@ -68,18 +72,18 @@ export function signPhotoToken(
 // connait l'event attendu via un contexte serveur independant, on rejette tout token
 // dont l'eventId verifie ne correspond pas, plutot que de faire confiance au seul champ
 // du token pour resoudre le secret.
-export function verifyPhotoToken(
+export async function verifyPhotoToken(
   token: string,
   eventSecret: string,
   expectedEventId?: string
-): { photoKey: string; eventId: string } | null {
+): Promise<{ photoKey: string; eventId: string } | null> {
   try {
     // Decode sans verifier d'abord pour extraire le salt
     const decoded = jwt.decode(token) as any;
     if (!decoded || !decoded.s || !decoded.k || !decoded.e) return null;
 
-    // Re-derive la cle avec le salt du token
-    const signingKey = deriveSigningKey(eventSecret, decoded.s);
+    // Re-derive la cle avec le salt du token (async)
+    const signingKey = await deriveSigningKey(eventSecret, decoded.s);
 
     // Verification complete (signature + expiration)
     const verified = jwt.verify(token, signingKey, {

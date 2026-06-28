@@ -28,17 +28,23 @@ export default function DashboardPage() {
   // audit: INFO-031 — distinguer l'echec reseau de l'etat vide legitime.
   const [loadError, setLoadError] = useState(false);
 
-  const loadEvents = () => {
+  const loadEvents = (signal?: AbortSignal) => {
     setLoading(true);
     setLoadError(false);
-    api.get('/events')
+    api.get('/events', { signal })
       .then(({ data }) => setEvents(data))
-      .catch((err) => { console.error(err); setLoadError(true); })
+      .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        console.error(err);
+        setLoadError(true);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    loadEvents();
+    const ctrl = new AbortController();
+    loadEvents(ctrl.signal);
+    return () => ctrl.abort();
   }, []);
 
   // audit: LOW-078 — stats coherentes avec les badges (status + deadline)
@@ -165,7 +171,7 @@ export default function DashboardPage() {
           <p style={{ fontSize: 15, color: 'var(--rp-danger-text)', marginBottom: '1rem' }}>
             Erreur de chargement des événements.
           </p>
-          <button className="btn-secondary" onClick={loadEvents}>Réessayer</button>
+          <button className="btn-secondary" onClick={() => loadEvents()}>Réessayer</button>
         </div>
       ) : events.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '2.5rem 1.5rem' }}>

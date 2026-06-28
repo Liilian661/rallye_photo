@@ -11,14 +11,19 @@ export interface AuthRequest extends Request {
 }
 
 export function requireAuth(req: AuthRequest, res: Response, next: NextFunction): void {
+  // Accepter le token depuis le header Authorization OU depuis le cookie HttpOnly
+  let token: string | undefined;
   const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.cookies?.accessToken) {
+    token = req.cookies.accessToken as string;
+  }
 
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (!token) {
     res.status(401).json({ error: 'Token manquant' });
     return;
   }
-
-  const token = authHeader.split(' ')[1];
 
   try {
     const decoded = verifyAccessToken(token);
@@ -45,12 +50,19 @@ export function requireAuthOrParticipant(
   res: Response,
   next: NextFunction
 ): void {
+  // Accepter le token depuis header Authorization OU cookie HttpOnly
+  let token: string | undefined;
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader?.startsWith('Bearer ')) {
+    token = authHeader.split(' ')[1];
+  } else if (req.cookies?.accessToken) {
+    token = req.cookies.accessToken as string;
+  }
+
+  if (!token) {
     res.status(401).json({ error: 'Authentification requise' });
     return;
   }
-  const token = authHeader.split(' ')[1];
 
   try {
     req.user = verifyAccessToken(token);

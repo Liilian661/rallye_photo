@@ -9,6 +9,26 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import { rateLimiter } from '../middleware/rateLimiter';
 import { sendVerificationEmail, sendResetPasswordEmail, sendWelcomeEmail } from '../utils/emailService';
 import { logAudit } from '../utils/auditLog';
+import { consumeImpersonateCode } from '../utils/impersonateCodes';
+
+// Cookies HttpOnly posés par l'API — inaccessibles au JS côté client.
+// SameSite=Strict suffit car panel/admin/api sont tous *.rallye-photo.com (même eTLD+1).
+const AUTH_COOKIE = {
+  httpOnly: true,
+  secure: true,
+  sameSite: 'strict' as const,
+  path: '/',
+} as const;
+
+function setAuthCookies(res: Response, accessToken: string, refreshToken: string): void {
+  res.cookie('accessToken', accessToken, { ...AUTH_COOKIE, maxAge: 15 * 60 * 1000 });
+  res.cookie('refreshToken', refreshToken, { ...AUTH_COOKIE, maxAge: 30 * 24 * 60 * 60 * 1000 });
+}
+
+function clearAuthCookies(res: Response): void {
+  res.clearCookie('accessToken', { ...AUTH_COOKIE });
+  res.clearCookie('refreshToken', { ...AUTH_COOKIE });
+}
 
 const router = Router();
 
@@ -121,6 +141,8 @@ router.post('/register', rateLimiter(5, 60000), validateBody(registerSchema), as
       details: { email, referredBy: referrerId ?? undefined },
       ip: getIp(req),
     });
+
+    setAuthCookies(res, accessToken, refreshToken);
 
     res.status(201).json({
       user: { id, firstName, lastName, email, plan: 'free', eventCredits: 0 },
@@ -343,6 +365,8 @@ router.post('/login', rateLimiter(10, 60000), validateBody(loginSchema), async (
 
     logAudit('user.login', { userId: user.id, ip: getIp(req) });
 
+    setAuthCookies(res, accessToken, refreshToken);
+
     res.json({
       user: {
         id:           user.id,
@@ -365,7 +389,8 @@ router.post('/login', rateLimiter(10, 60000), validateBody(loginSchema), async (
 // audit: MED-003 — rate limiter pour limiter le brute-force de la table refresh_tokens.
 router.post('/refresh', rateLimiter(30, 60000), async (req, res: Response): Promise<void> => {
   try {
-    const { refreshToken } = req.body;
+    // Accepter depuis le corps OU depuis le cookie HttpOnly
+    const refreshToken: string | undefined = req.body?.refreshToken || req.cookies?.refreshToken;
 
     if (!refreshToken) {
       res.status(400).json({ error: 'Refresh token manquant' });
@@ -468,6 +493,8 @@ router.post('/refresh', rateLimiter(30, 60000), async (req, res: Response): Prom
       [record.user_id]
     ).catch(() => {});
 
+    setAuthCookies(res, newAccessToken, newRefreshToken);
+
     res.json({ accessToken: newAccessToken, refreshToken: newRefreshToken });
   } catch (error) {
     console.error('Refresh error:', error);
@@ -507,6 +534,7 @@ router.post('/logout', requireAuth, async (req: AuthRequest, res: Response): Pro
 
     logAudit('user.logout', { userId: req.user!.userId, ip: getIp(req) });
 
+    clearAuthCookies(res);
     res.json({ message: 'Deconnexion reussie' });
   } catch (error) {
     console.error('Logout error:', error);
@@ -544,6 +572,65 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     });
   } catch (error) {
     console.error('Me error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /auth/impersonate-exchange — Échange un code éphémère (60s) émis par l'admin
+// contre des cookies HttpOnly de session impersonée.
+// Pas d'authentification requise : le code est le facteur d'auth.
+router.post('/impersonate-exchange', rateLimiter(5, 60000), async (req, res: Response): Promise<void> => {
+  try {
+    const { code } = req.body;
+    if (!code || typeof code !== 'string') {
+      res.status(400).json({ error: 'Code manquant' });
+      return;
+    }
+
+    const entry = consumeImpersonateCode(code);
+    if (!entry) {
+      res.status(401).json({ error: 'Code invalide ou expiré' });
+      return;
+    }
+
+    const [rows] = await pool.execute(
+      'SELECT id, first_name, last_name, email, plan, event_credits FROM users WHERE id = ?',
+      [entry.userId]
+    );
+    const user = (rows as any[])[0];
+    if (!user) {
+      res.status(404).json({ error: 'Utilisateur introuvable' });
+      return;
+    }
+
+    const { generateAccessToken, generateRefreshToken, hashToken } = require('../utils/crypto');
+
+    const accessToken  = generateAccessToken({ userId: user.id, email: user.email, impersonatedBy: entry.adminId });
+    const refreshToken = generateRefreshToken();
+    const hashedRefresh = hashToken(refreshToken);
+
+    await pool.execute(
+      'INSERT INTO refresh_tokens (id, user_id, token_hash, impersonated_by, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+      [uuidv4(), user.id, hashedRefresh, entry.adminId]
+    );
+
+    setAuthCookies(res, accessToken, refreshToken);
+
+    res.json({
+      accessToken,
+      refreshToken,
+      user: {
+        id: user.id,
+        firstName: user.first_name,
+        lastName: user.last_name,
+        email: user.email,
+        plan: user.plan,
+        eventCredits: user.event_credits ?? 0,
+        impersonated: true,
+      },
+    });
+  } catch (error) {
+    console.error('Impersonate exchange error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

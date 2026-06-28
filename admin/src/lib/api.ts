@@ -16,6 +16,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.co
 const api = axios.create({
   baseURL: API_BASE,
   headers: { 'Content-Type': 'application/json' },
+  withCredentials: true, // envoie les cookies HttpOnly automatiquement
 });
 
 api.interceptors.request.use((config) => {
@@ -44,16 +45,18 @@ function doRefresh(): Promise<string> {
   if (refreshPromise) return refreshPromise;
 
   refreshPromise = (async () => {
-    // audit: LOW-080 — verifier la presence du refreshToken avant tout aller-retour reseau.
-    const refreshToken = Cookies.get('adminRefreshToken');
-    if (!refreshToken) {
-      throw new Error('NO_REFRESH_TOKEN');
+    // Hybride : les sessions HttpOnly envoient le cookie automatiquement (withCredentials).
+    // Les anciennes sessions (adminRefreshToken en js-cookie) l'envoient aussi dans le body.
+    const legacyRefreshToken = Cookies.get('adminRefreshToken');
+    const body = legacyRefreshToken ? { refreshToken: legacyRefreshToken } : {};
+    const { data } = await axios.post(API_BASE + '/auth/refresh', body, { withCredentials: true });
+    if (data.accessToken && legacyRefreshToken) {
+      Cookies.set('adminAccessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
     }
-    const { data } = await axios.post(API_BASE + '/auth/refresh', { refreshToken });
-    // audit: LOW-070 — reutiliser COOKIE_OPTS (sameSite strict + secure) au refresh, comme au login.
-    Cookies.set('adminAccessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
-    Cookies.set('adminRefreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
-    return data.accessToken as string;
+    if (data.refreshToken && legacyRefreshToken) {
+      Cookies.set('adminRefreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
+    }
+    return (data.accessToken as string) || '';
   })();
 
   // Liberer le verrou une fois la promesse resolue/rejetee (sans masquer le resultat).

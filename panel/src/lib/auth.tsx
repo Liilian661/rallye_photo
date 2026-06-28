@@ -76,9 +76,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
+    // Les tokens sont posés en cookies HttpOnly par l'API (Set-Cookie) — aucun stockage JS requis.
     const { data } = await api.post('/auth/login', { email, password });
-    Cookies.set('accessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
-    Cookies.set('refreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
+    // Supprimer les anciens cookies legacy si présents (migration)
+    Cookies.remove('accessToken');
+    Cookies.remove('refreshToken');
     try {
       const { data: profile } = await api.get('/auth/me');
       const fullUser = normalizeUser(profile); // audit: INFO-033/INFO-034
@@ -92,11 +94,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const register = async (registerData: RegisterData) => {
+    // Les tokens sont posés en cookies HttpOnly par l'API — aucun stockage JS requis.
     const { data } = await api.post('/auth/register', registerData);
-    // audit: INFO-033 — normaliser comme login/refreshUser (eventCredits, plan...), emailVerified force a false.
+    Cookies.remove('accessToken');
+    Cookies.remove('refreshToken');
+    // audit: INFO-033 — normaliser comme login/refreshUser, emailVerified force a false.
     const newUser = normalizeUser({ ...data.user, emailVerified: false });
-    Cookies.set('accessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
-    Cookies.set('refreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
     Cookies.set('user', JSON.stringify(newUser), { expires: 30, ...COOKIE_OPTS });
     setUser(newUser);
   };

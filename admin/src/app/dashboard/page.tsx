@@ -41,10 +41,15 @@ export default function AdminDashboardPage() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    api.get('/admin/stats')
+    const ctrl = new AbortController();
+    api.get('/admin/stats', { signal: ctrl.signal })
       .then(({ data }) => setStats(data))
-      .catch(console.error)
+      .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        console.error(err);
+      })
       .finally(() => setLoading(false));
+    return () => ctrl.abort();
   }, []);
 
   if (loading) return <p style={{ color: 'var(--rp-text-muted)' }}>Chargement...</p>;

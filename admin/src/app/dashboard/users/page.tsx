@@ -145,17 +145,10 @@ export default function AdminUsersPage() {
     if (!confirm('Se connecter en tant que ' + name + ' sur le panel ?')) return;
     try {
       const { data } = await api.post('/admin/impersonate/' + userId);
-      // audit: HIGH-016 — ne JAMAIS transmettre les tokens en query string (?) : ils fuiteraient
-      // via l'historique, les logs proxy/serveur et le header Referer. On les place dans le FRAGMENT
-      // d'URL (#), jamais envoye au serveur. Le panel lit window.location.hash puis l'efface
-      // immediatement via history.replaceState avant tout chargement (cf panel dashboard/layout.tsx).
+      // Code éphémère 60s — jamais de tokens dans l'URL.
+      // Le panel échange le code via POST /auth/impersonate-exchange (cookies HttpOnly).
       const panelUrl = process.env.NEXT_PUBLIC_PANEL_URL || 'https://panel.rallye-photo.com';
-      const params = new URLSearchParams({
-        accessToken: data.accessToken,
-        refreshToken: data.refreshToken,
-        user: JSON.stringify(data.user),
-      });
-      window.open(panelUrl + '/dashboard#impersonate=' + encodeURIComponent(params.toString()), '_blank');
+      window.open(panelUrl + '/auth/impersonate?code=' + encodeURIComponent(data.code), '_blank');
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }

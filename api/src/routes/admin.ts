@@ -10,6 +10,7 @@ import { hashPassword } from '../utils/crypto';
 import { encrypt } from '../utils/encryption';
 import { testS3Connection, invalidateS3Cache } from '../utils/s3Service';
 import { logAudit } from '../utils/auditLog';
+import { createImpersonateCode } from '../utils/impersonateCodes';
 
 const router = Router();
 
@@ -747,7 +748,8 @@ router.get('/affiliates', async (_req: AuthRequest, res: Response): Promise<void
   }
 });
 
-// POST /admin/impersonate/:userId - Generate tokens to login as a user
+// POST /admin/impersonate/:userId - Génère un code éphémère (60s) pour se connecter en tant qu'utilisateur.
+// Le panel échange ce code via POST /auth/impersonate-exchange (cookies HttpOnly posés par l'API).
 router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { userId } = req.params;
@@ -770,40 +772,16 @@ router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Pro
       return;
     }
 
-    const { generateAccessToken, generateRefreshToken, hashToken } = require('../utils/crypto');
-    const { v4: uuidv4 } = require('uuid');
-
     const adminId = req.user!.userId;
-    const accessToken = generateAccessToken({ userId: user.id, email: user.email, impersonatedBy: adminId });
-    const refreshToken = generateRefreshToken();
-    const hashedRefresh = hashToken(refreshToken);
-
-    // audit: HIGH-012 - TTL court (1h) + marquage impersonated_by pour audit/revocation,
-    // au lieu d'un refresh token persistant 30j independant de la session admin.
-    await pool.execute(
-      'INSERT INTO refresh_tokens (id, user_id, token_hash, impersonated_by, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
-      [uuidv4(), user.id, hashedRefresh, adminId]
-    );
+    const code = createImpersonateCode(user.id, adminId);
 
     // audit: INFO-014 - 'admin.impersonate' fait desormais partie du type AuditAction
-    // (ajoute dans utils/auditLog.ts), le cast 'as any' n'est plus necessaire.
     await logAudit('admin.impersonate', {
       userId: adminId,
       details: { targetUserId: user.id, targetEmail: user.email },
     });
 
-    res.json({
-      accessToken,
-      refreshToken,
-      user: {
-        id: user.id,
-        firstName: user.first_name,
-        lastName: user.last_name,
-        email: user.email,
-        plan: user.plan,
-        impersonated: true,
-      },
-    });
+    res.json({ code });
   } catch (error) {
     console.error('Admin impersonate error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
