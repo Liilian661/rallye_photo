@@ -21,9 +21,9 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
 
     const [statsRows] = await pool.execute(
       `SELECT
-         COUNT(*)                                                  AS total_referred,
-         SUM(status IN ('converted','rewarded'))                  AS converted,
-         SUM(status = 'rewarded')                                 AS rewarded
+         COUNT(*) AS total_referred,
+         COALESCE(SUM(CASE WHEN status IN ('converted','rewarded') THEN 1 ELSE 0 END), 0) AS converted,
+         COALESCE(SUM(CASE WHEN status = 'rewarded' THEN 1 ELSE 0 END), 0) AS rewarded
        FROM referrals WHERE referrer_id = ?`,
       [userId]
     );

@@ -136,11 +136,16 @@ export async function getS3Client(): Promise<S3Client | null> {
 /**
  * Upload un fichier sur S3
  */
+const ALLOWED_UPLOAD_MIME = ['image/jpeg', 'image/png', 'image/webp', 'image/gif', 'video/mp4', 'video/quicktime', 'video/webm'];
+
 export async function uploadToS3(
   key: string,
   body: Buffer,
   contentType: string
 ): Promise<string> {
+  if (!ALLOWED_UPLOAD_MIME.includes(contentType)) {
+    throw new Error(`Type de fichier non autorise: ${contentType}`);
+  }
   const safeKey = assertValidS3Key(key); // audit: MED-020
   const client = await getS3Client();
   const config = await getS3Config();
@@ -199,7 +204,7 @@ export async function getSignedDownloadUrl(
     Key: safeKey,
   });
 
-  return getSignedUrl(client, command, { expiresIn });
+  return getSignedUrl(client, command, { expiresIn: Math.min(expiresIn, 3600) });
 }
 
 /**

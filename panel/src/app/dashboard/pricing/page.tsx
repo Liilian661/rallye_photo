@@ -99,6 +99,17 @@ function PricingContent() {
         type,
         ...(type === 'credit' ? { quantity } : { billing: proYearly ? 'yearly' : 'monthly' }),
       });
+      try {
+        const parsed = new URL(data.url);
+        const allowedDomains = ['stripe.com', 'rallye-photo.com'];
+        if (!allowedDomains.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d))) {
+          throw new Error('URL de redirection invalide');
+        }
+      } catch {
+        setError('URL de redirection invalide');
+        setLoading(null);
+        return;
+      }
       window.location.href = data.url;
     } catch (err: any) {
       const msg = err.response?.data?.error || 'Erreur lors de la connexion au paiement.';

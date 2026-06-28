@@ -111,7 +111,8 @@ export default function AdminUsersPage() {
     return () => clearTimeout(timer);
   }, [loadUsers]);
 
-  const changePlan = async (userId: string, newPlan: string) => {
+  const changePlan = async (userId: string, newPlan: string, email: string) => {
+    if (!confirm(`Changer le plan de ${email} vers ${newPlan} ?`)) return;
     try {
       await api.patch('/admin/users/' + userId, { plan: newPlan });
       loadUsers();
@@ -239,7 +240,7 @@ export default function AdminUsersPage() {
                   <td>
                     <select
                       value={u.plan}
-                      onChange={(e) => changePlan(u.id, e.target.value)}
+                      onChange={(e) => changePlan(u.id, e.target.value, u.email)}
                       style={{
                         background: 'var(--rp-bg-input)', color: 'var(--rp-text-primary)',
                         border: '1px solid var(--rp-border)', borderRadius: 6,

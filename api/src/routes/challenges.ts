@@ -11,6 +11,7 @@ import { deleteFromS3 } from '../utils/s3Service';
 import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
 // audit: HIGH-006 — detection optionnelle de l'organisateur (token user JWT)
 import { verifyAccessToken } from '../utils/crypto';
+import { rateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
@@ -33,7 +34,7 @@ async function isEventOwnerRequest(req: any, eventId: string): Promise<boolean> 
 }
 
 // GET /events/:eventId/challenges
-router.get('/events/:eventId/challenges', async (req, res: Response): Promise<void> => {
+router.get('/events/:eventId/challenges', rateLimiter(60, 60000), async (req, res: Response): Promise<void> => {
   try {
     const ownerView = await isEventOwnerRequest(req, req.params.eventId as string);
     const sql = ownerView

@@ -55,8 +55,8 @@ router.post('/stripe', async (req: Request, res: Response): Promise<void> => {
   const stripeKey    = process.env.STRIPE_SECRET_KEY;
 
   if (!webhookSecret || !stripeKey) {
-    console.warn('[Webhook] Stripe env vars not configured — event ignored');
-    res.status(200).json({ received: true });
+    console.warn('[Webhook] Stripe env vars not configured — event rejected');
+    res.status(503).json({ error: 'Stripe non configure' });
     return;
   }
 

@@ -11,7 +11,7 @@ const pool = mysql.createPool({
   database: process.env.DB_NAME,
   waitForConnections: true,
   connectionLimit: 10,
-  queueLimit: 0,
+  queueLimit: 500,
   ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true } : undefined,
   connectTimeout: 10000,
   timezone: '+00:00',
@@ -21,7 +21,9 @@ const pool = mysql.createPool({
 const internalPool: any = (pool as any).pool;
 if (typeof internalPool?.on === 'function') {
   internalPool.on('connection', (conn: any) => {
-    conn.query("SET time_zone = '+00:00'");
+    conn.query("SET time_zone = '+00:00'", (err: any) => {
+      if (err) console.error('[DB] Failed to set time_zone:', err);
+    });
   });
 } else {
   console.warn('[DB] Cannot hook connection event — time_zone may not be UTC');

@@ -306,6 +306,7 @@ router.get('/events/:eventId/submissions', requireAuthOrParticipant, async (req:
         const token = signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
         sub.photo_url = apiBase + '/photos/' + token;
       }
+      delete sub.photo_key;
     }
 
     res.json(submissions);
@@ -322,13 +323,16 @@ router.get('/challenges/:challengeId/submissions', requireAuth, async (req: Auth
     const [challengeRows] = await pool.execute('SELECT event_id FROM challenges WHERE id = ?', [challengeId]);
     const eventId = (challengeRows as any[])[0]?.event_id;
 
+    if (!eventId) {
+      res.status(404).json({ error: 'Challenge non trouve' });
+      return;
+    }
+
     // Vérifier que l'organisateur possède l'event lié au challenge
-    if (eventId) {
-      const [ownerRows] = await pool.execute('SELECT id FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
-      if ((ownerRows as any[]).length === 0) {
-        res.status(403).json({ error: 'Accès refusé' });
-        return;
-      }
+    const [ownerRows] = await pool.execute('SELECT id FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
+    if ((ownerRows as any[]).length === 0) {
+      res.status(403).json({ error: 'Accès refusé' });
+      return;
     }
     let eventSecret: string | null = null;
     if (eventId) {

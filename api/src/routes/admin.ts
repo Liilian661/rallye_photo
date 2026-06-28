@@ -327,6 +327,10 @@ router.delete('/users/:id', async (req: AuthRequest, res: Response): Promise<voi
 router.get('/events', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const status = req.query.status as string || '';
+    if (status && !['active', 'ended', 'archived'].includes(status)) {
+      res.status(400).json({ error: 'Statut invalide' });
+      return;
+    }
 
     let query = `SELECT e.id, e.name, e.description, e.code, e.status, e.deadline, e.event_date,
                         e.created_at, e.gallery_enabled, e.gallery_locked,
@@ -360,7 +364,11 @@ router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void>
     const { id } = req.params;
 
     const [eventRows] = await pool.execute(
-      `SELECT e.*, u.first_name, u.last_name, u.email as organizer_email
+      `SELECT e.id, e.name, e.description, e.code, e.status, e.deadline, e.event_date,
+              e.created_at, e.updated_at, e.gallery_enabled, e.gallery_locked, e.gallery_locked_until,
+              e.scoring_mode, e.team_mode, e.theme_color, e.tier, e.logo_key, e.banner_key,
+              e.user_id, e.referral_code,
+              u.first_name, u.last_name, u.email as organizer_email
        FROM events e JOIN users u ON e.user_id = u.id WHERE e.id = ?`,
       [id]
     );
@@ -634,8 +642,8 @@ router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): 
         });
         const s3Response = await client.send(command);
         if (s3Response.Body) {
-          const folder = sub.challenge_title.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 40);
-          const fileName = sub.participant_name.replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 30) + '.webp';
+          const folder = sub.challenge_title.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9 ]/g, '').slice(0, 40);
+          const fileName = (sub.participant_name.normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9 ]/g, '') || 'participant').slice(0, 30) + '.webp';
           fetched.push({ folder, fileName, body: s3Response.Body });
         }
       } catch (err) {

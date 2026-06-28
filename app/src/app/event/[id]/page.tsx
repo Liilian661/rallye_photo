@@ -376,7 +376,7 @@ export default function EventPage() {
   const openFilePicker = (challengeId: string, useCamera: boolean) => {
     const input = document.createElement('input');
     input.type = 'file';
-    input.accept = 'image/*';
+    input.accept = 'image/*,video/*';
     if (useCamera) input.setAttribute('capture', 'environment');
     input.onchange = () => {
       const file = input.files?.[0];

@@ -54,7 +54,11 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
 
   useEffect(() => { setOpen(false); }, [pathname]);
 
-  const logout = () => {
+  const logout = async () => {
+    try {
+      const refreshToken = Cookies.get('adminRefreshToken');
+      if (refreshToken) await api.post('/auth/logout', { refreshToken });
+    } catch { /* ignorer l'erreur réseau, on déconnecte quand même */ }
     Cookies.remove('adminAccessToken');
     Cookies.remove('adminRefreshToken');
     Cookies.remove('adminUser');

@@ -92,6 +92,7 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
       for (const eventId of joinedEvents) {
         emitOnlineCount(eventId);
       }
+      joinedEvents.clear();
     });
   });
 

@@ -605,6 +605,10 @@ router.delete('/:id/logo', requireAuth, async (req: AuthRequest, res: Response):
   try {
     // audit: LOW-030 - recuperer la cle S3 avant de la perdre (NULL) puis supprimer l'objet
     const [rows] = await pool.execute('SELECT logo_key FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    if ((rows as any[]).length === 0) {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
     const key = (rows as any[])[0]?.logo_key;
     await pool.execute('UPDATE events SET logo_key = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
     if (key) {
@@ -621,6 +625,10 @@ router.delete('/:id/banner', requireAuth, async (req: AuthRequest, res: Response
   try {
     // audit: LOW-030 - recuperer la cle S3 avant de la perdre (NULL) puis supprimer l'objet
     const [rows] = await pool.execute('SELECT banner_key FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    if ((rows as any[]).length === 0) {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
     const key = (rows as any[])[0]?.banner_key;
     await pool.execute('UPDATE events SET banner_key = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
     if (key) {

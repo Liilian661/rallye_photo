@@ -69,7 +69,13 @@ export default function GalleryPage() {
       else setCountdown(m + 'min');
     };
     update();
-    const interval = setInterval(update, 60000);
+    let interval: ReturnType<typeof setInterval>;
+    const wrappedUpdate = () => {
+      const diff = new Date(gallery.expiresAt!).getTime() - Date.now();
+      if (diff <= 0) { setCountdown('Expire'); setExpired(true); clearInterval(interval); return; }
+      update();
+    };
+    interval = setInterval(wrappedUpdate, 60000);
     return () => clearInterval(interval);
   }, [gallery]);
 

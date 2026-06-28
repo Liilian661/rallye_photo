@@ -124,12 +124,12 @@ export default function EventsPage() {
                   <p style={{ fontSize: 13, color: 'var(--rp-text-muted)' }}>
                     Code : <span style={{ fontWeight: 600, color: 'var(--rp-accent)' }}>{event.code}</span>
                     {' · '}
-                    Deadline : {new Date(event.deadline).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}
+                    Deadline : {event.deadline ? new Date(event.deadline).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' }) : 'Aucune'}
                   </p>
                 </div>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 6 }}>
-                  <span className={`badge ${event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'badge-success' : 'badge-muted'}`}>
-                    {event.status === 'active' && new Date(event.deadline).getTime() > Date.now() ? 'Actif' : new Date(event.deadline).getTime() <= Date.now() ? 'Expire' : event.status}
+                  <span className={`badge ${event.status === 'active' && event.deadline && new Date(event.deadline).getTime() > Date.now() ? 'badge-success' : 'badge-muted'}`}>
+                    {event.status === 'active' && event.deadline && new Date(event.deadline).getTime() > Date.now() ? 'Actif' : event.deadline && new Date(event.deadline).getTime() <= Date.now() ? 'Expire' : event.status}
                   </span>
                   <TierBadge tier={event.tier || 'free'} />
                 </div>
