@@ -1,7 +1,10 @@
 import { Router, Response } from 'express';
 import { z } from 'zod';
+import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import pool from '../config/database';
 import { requireAdmin, AuthRequest } from '../middleware/auth';
+import { hashPassword } from '../utils/crypto';
 import { encrypt } from '../utils/encryption';
 import { testS3Connection, invalidateS3Cache } from '../utils/s3Service';
 import { logAudit } from '../utils/auditLog';
@@ -150,6 +153,51 @@ router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
     res.json(result);
   } catch (error) {
     console.error('Admin users error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// POST /admin/users — créer un utilisateur déjà vérifié
+router.post('/users', async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { firstName, lastName, email, password, plan = 'free' } = req.body;
+
+    if (!firstName || !lastName || !email || !password) {
+      res.status(400).json({ error: 'firstName, lastName, email et password sont requis' });
+      return;
+    }
+
+    if (password.length < 8) {
+      res.status(400).json({ error: 'Le mot de passe doit faire au moins 8 caractères' });
+      return;
+    }
+
+    const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
+    if ((existing as any[]).length > 0) {
+      res.status(409).json({ error: 'Un compte existe déjà avec cet email' });
+      return;
+    }
+
+    const id = uuidv4();
+    const passwordHash = await hashPassword(password);
+    const referralCode = crypto.randomBytes(8).toString('hex').substring(0, 8).toUpperCase();
+
+    await pool.execute(
+      `INSERT INTO users (id, first_name, last_name, email, password_hash, newsletter, email_verified, plan, referral_code)
+       VALUES (?, ?, ?, ?, ?, 0, 1, ?, ?)`,
+      [id, firstName, lastName, email, passwordHash, plan, referralCode]
+    );
+
+    await logAudit('admin.create_user', {
+      userId: req.user!.userId,
+      entityType: 'user',
+      entityId: id,
+      details: { email, plan, createdBy: req.user!.userId },
+    });
+
+    res.status(201).json({ id, email, firstName, lastName, plan, email_verified: 1 });
+  } catch (error) {
+    console.error('Admin create user error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

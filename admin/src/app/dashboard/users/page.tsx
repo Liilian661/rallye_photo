@@ -4,6 +4,73 @@ import { useState, useEffect, useCallback } from 'react';
 import api from '@/lib/api';
 import { IconCheck, IconError, IconLock } from '@/lib/icons';
 
+function CreateUserModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
+  const [form, setForm] = useState({ firstName: '', lastName: '', email: '', password: '', plan: 'free' });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setLoading(true);
+    try {
+      await api.post('/admin/users', form);
+      onCreated();
+      onClose();
+    } catch (err: any) {
+      setError(err.response?.data?.error || 'Erreur');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000,
+    }} onClick={onClose}>
+      <div style={{
+        background: 'var(--rp-bg-card)', borderRadius: 12, padding: 24, width: 400,
+        boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
+      }} onClick={(e) => e.stopPropagation()}>
+        <h3 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, marginBottom: 16 }}>
+          Créer un utilisateur
+        </h3>
+
+        {error && <p style={{ color: 'var(--rp-danger-text)', fontSize: 13, marginBottom: 12 }}>{error}</p>}
+
+        <form onSubmit={submit} style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input className="input-field" placeholder="Prénom *" value={form.firstName}
+              onChange={e => setForm(f => ({ ...f, firstName: e.target.value }))} required />
+            <input className="input-field" placeholder="Nom *" value={form.lastName}
+              onChange={e => setForm(f => ({ ...f, lastName: e.target.value }))} required />
+          </div>
+          <input className="input-field" type="email" placeholder="Email *" value={form.email}
+            onChange={e => setForm(f => ({ ...f, email: e.target.value }))} required />
+          <input className="input-field" type="password" placeholder="Mot de passe * (8 caractères min)" value={form.password}
+            onChange={e => setForm(f => ({ ...f, password: e.target.value }))} required minLength={8} />
+          <select className="input-field" value={form.plan} onChange={e => setForm(f => ({ ...f, plan: e.target.value }))}>
+            <option value="free">Free</option>
+            <option value="pro">Pro</option>
+          </select>
+          <p style={{ fontSize: 11, color: 'var(--rp-text-muted)' }}>
+            Le compte sera automatiquement vérifié (pas d&apos;email de confirmation).
+          </p>
+          <div style={{ display: 'flex', gap: 8, marginTop: 4 }}>
+            <button type="submit" className="btn-primary" disabled={loading} style={{ flex: 1 }}>
+              {loading ? 'Création...' : 'Créer'}
+            </button>
+            <button type="button" className="btn-secondary" onClick={onClose} style={{ flex: 1 }}>
+              Annuler
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 interface User {
   id: string;
   first_name: string;
@@ -22,6 +89,7 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [filterPlan, setFilterPlan] = useState('');
+  const [showCreate, setShowCreate] = useState(false);
 
   const loadUsers = useCallback(async () => {
     try {
@@ -94,9 +162,18 @@ export default function AdminUsersPage() {
 
   return (
     <div className="fade-in">
-      <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, marginBottom: 20 }}>
-        Utilisateurs ({users.length})
-      </h2>
+      {showCreate && (
+        <CreateUserModal onClose={() => setShowCreate(false)} onCreated={loadUsers} />
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+        <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 }}>
+          Utilisateurs ({users.length})
+        </h2>
+        <button className="btn-primary" onClick={() => setShowCreate(true)} style={{ fontSize: 13, padding: '8px 16px' }}>
+          + Créer un utilisateur
+        </button>
+      </div>
 
       {/* Filters */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 16 }}>
