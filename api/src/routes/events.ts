@@ -7,7 +7,8 @@ import { GetObjectCommand } from '@aws-sdk/client-s3';
 import pool from '../config/database';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { validateBody } from '../middleware/validateInput';
-import { createEventSchema } from '../utils/validators';
+import { rateLimiter } from '../middleware/rateLimiter';
+import { createEventSchema, updateEventSchema } from '../utils/validators';
 import { generateUniqueEventCode } from '../utils/codeGenerator';
 import { emitToEvent } from '../config/socket';
 import { resolveEventTier, getEventLimit, USER_PLANS, EVENT_TIER_LIMITS, EventTier } from '../config/plans';
@@ -128,7 +129,7 @@ router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthR
 });
 
 // GET /events/join/:code
-router.get('/join/:code', async (req, res: Response): Promise<void> => {
+router.get('/join/:code', rateLimiter(30, 60000), async (req, res: Response): Promise<void> => {
   try {
     const { code } = req.params;
 
@@ -218,27 +219,11 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
 });
 
 // PATCH /events/:id
-router.patch('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+router.patch('/:id', requireAuth, validateBody(updateEventSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { name, description, eventDate, deadline, galleryEnabled, status, scoringMode, teamMode } = req.body;
 
-    // audit: LOW-016 - validation des valeurs PATCH (enum status/scoringMode, hex themeColor).
-    // Les NOMS de colonnes restent une whitelist en dur (cf INFO-006), seules les valeurs
-    // sont parametrees ; on rejette ici les valeurs hors domaine avant ecriture.
-    if (status !== undefined && !['active', 'ended', 'archived'].includes(status)) {
-      res.status(400).json({ error: 'Statut invalide' });
-      return;
-    }
-    if (scoringMode !== undefined && !['winner', 'participation'].includes(scoringMode)) {
-      res.status(400).json({ error: 'Mode de scoring invalide' });
-      return;
-    }
-    if (req.body.themeColor !== undefined && req.body.themeColor !== null
-        && !/^#[0-9a-fA-F]{6}$/.test(req.body.themeColor)) {
-      res.status(400).json({ error: 'Couleur de theme invalide (format hex #rrggbb)' });
-      return;
-    }
-
+    // Validation assurée par validateBody(updateEventSchema) — Zod reject avant d'arriver ici.
     const fields: string[] = [];
     const values: any[] = [];
 

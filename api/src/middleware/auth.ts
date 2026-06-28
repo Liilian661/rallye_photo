@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyAccessToken } from '../utils/crypto';
+import { verifyParticipantToken } from './participantAuth';
 import pool from '../config/database';
 
 export interface AuthRequest extends Request {
@@ -30,6 +31,41 @@ export function requireAuth(req: AuthRequest, res: Response, next: NextFunction)
       res.status(401).json({ error: 'Token invalide' });
     }
   }
+}
+
+// Middleware qui accepte soit un JWT organisateur, soit un token participant.
+// req.user est rempli si organisateur, req.participant si participant.
+export interface DualAuthRequest extends Request {
+  user?: { userId: string; email: string };
+  participant?: { participantId: string; eventId: string };
+}
+
+export function requireAuthOrParticipant(
+  req: DualAuthRequest,
+  res: Response,
+  next: NextFunction
+): void {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'Authentification requise' });
+    return;
+  }
+  const token = authHeader.split(' ')[1];
+
+  try {
+    req.user = verifyAccessToken(token);
+    next();
+    return;
+  } catch {}
+
+  const participant = verifyParticipantToken(token);
+  if (participant) {
+    req.participant = participant;
+    next();
+    return;
+  }
+
+  res.status(401).json({ error: 'Token invalide' });
 }
 
 export function requireAdmin(req: AuthRequest, res: Response, next: NextFunction): void {

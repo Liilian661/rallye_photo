@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import pool from '../config/database';
 import { hashPassword, comparePassword, comparePasswordDummy, generateAccessToken, generateRefreshToken, hashToken, generateEmailToken } from '../utils/crypto';
-import { registerSchema, loginSchema } from '../utils/validators';
+import { registerSchema, loginSchema, forgotPasswordSchema, resetPasswordSchema } from '../utils/validators';
 import { validateBody } from '../middleware/validateInput';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { rateLimiter } from '../middleware/rateLimiter';
@@ -220,14 +220,9 @@ router.post('/resend-verification', rateLimiter(3, 60000), requireAuth, async (r
 });
 
 // POST /auth/forgot-password
-router.post('/forgot-password', rateLimiter(3, 60000), async (req, res: Response): Promise<void> => {
+router.post('/forgot-password', rateLimiter(3, 60000), validateBody(forgotPasswordSchema), async (req, res: Response): Promise<void> => {
   try {
     const { email } = req.body;
-
-    if (!email) {
-      res.status(400).json({ error: 'Email requis' });
-      return;
-    }
 
     const [rows] = await pool.execute(
       'SELECT id, first_name, email FROM users WHERE email = ?',
@@ -267,19 +262,9 @@ router.post('/forgot-password', rateLimiter(3, 60000), async (req, res: Response
 });
 
 // POST /auth/reset-password
-router.post('/reset-password', rateLimiter(5, 60000), async (req, res: Response): Promise<void> => {
+router.post('/reset-password', rateLimiter(5, 60000), validateBody(resetPasswordSchema), async (req, res: Response): Promise<void> => {
   try {
     const { token, password } = req.body;
-
-    if (!token || !password) {
-      res.status(400).json({ error: 'Token et mot de passe requis' });
-      return;
-    }
-
-    if (password.length < 8) {
-      res.status(400).json({ error: 'Le mot de passe doit contenir au moins 8 caracteres' });
-      return;
-    }
 
     // audit: HIGH-002 / INFO-001 — comparer le hash du token (stocke hashe) ; la comparaison
     // porte alors sur un digest, ce qui clot l'oracle de timing theorique.

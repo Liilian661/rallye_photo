@@ -45,7 +45,9 @@ export default function LeaderboardPage() {
 
   const loadLeaderboard = useCallback(async () => {
     try {
-      const { data } = await api.get(`/events/${eventId}/leaderboard`);
+      const p = getParticipant(eventId);
+      const headers = p?.participantToken ? { Authorization: `Bearer ${p.participantToken}` } : {};
+      const { data } = await api.get(`/events/${eventId}/leaderboard`, { headers });
       setLeaderboard(data);
       setHasTeams(data.some((e: LeaderboardEntry) => e.teamName));
     } catch (err) {

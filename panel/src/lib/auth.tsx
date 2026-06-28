@@ -67,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const savedUser = Cookies.get('user');
     if (savedUser) {
       try {
-        setUser(JSON.parse(savedUser));
+        setUser(normalizeUser(JSON.parse(savedUser)));
       } catch {
         Cookies.remove('user');
       }

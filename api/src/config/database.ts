@@ -12,7 +12,7 @@ const pool = mysql.createPool({
   waitForConnections: true,
   connectionLimit: 10,
   queueLimit: 0,
-  ssl: process.env.DB_SSL === 'true' ? {} : undefined,
+  ssl: process.env.DB_SSL === 'true' ? { rejectUnauthorized: true } : undefined,
   connectTimeout: 10000,
   timezone: '+00:00',
 });

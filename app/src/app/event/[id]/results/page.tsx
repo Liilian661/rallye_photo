@@ -56,9 +56,11 @@ export default function ResultsPage() {
 
   const loadResults = useCallback(async () => {
     try {
+      const p = getParticipant(eventId);
+      const authHeaders = p?.participantToken ? { Authorization: `Bearer ${p.participantToken}` } : {};
       const [challengesRes, submissionsRes] = await Promise.all([
         api.get(`/events/${eventId}/challenges`),
-        api.get(`/events/${eventId}/submissions`),
+        api.get(`/events/${eventId}/submissions`, { headers: authHeaders }),
       ]);
 
       const challenges: Challenge[] = challengesRes.data;

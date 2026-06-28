@@ -4,6 +4,8 @@ import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import pool from '../config/database';
 import { requireAdmin, AuthRequest } from '../middleware/auth';
+import { validateBody } from '../middleware/validateInput';
+import { adminCreateUserSchema } from '../utils/validators';
 import { hashPassword } from '../utils/crypto';
 import { encrypt } from '../utils/encryption';
 import { testS3Connection, invalidateS3Cache } from '../utils/s3Service';
@@ -158,19 +160,9 @@ router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
 });
 
 // POST /admin/users — créer un utilisateur déjà vérifié
-router.post('/users', async (req: AuthRequest, res: Response): Promise<void> => {
+router.post('/users', validateBody(adminCreateUserSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { firstName, lastName, email, password, plan = 'free' } = req.body;
-
-    if (!firstName || !lastName || !email || !password) {
-      res.status(400).json({ error: 'firstName, lastName, email et password sont requis' });
-      return;
-    }
-
-    if (password.length < 8) {
-      res.status(400).json({ error: 'Le mot de passe doit faire au moins 8 caractères' });
-      return;
-    }
 
     const [existing] = await pool.execute('SELECT id FROM users WHERE email = ?', [email]);
     if ((existing as any[]).length > 0) {

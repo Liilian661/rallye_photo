@@ -144,7 +144,9 @@ export default function EventPage() {
     } catch (err) { console.error('Challenges fetch error:', err); }
 
     try {
-      const { data } = await api.get(`/events/${eventId}/submissions`);
+      const p2 = getParticipant(eventId);
+      const authHeaders = p2?.participantToken ? { Authorization: `Bearer ${p2.participantToken}` } : {};
+      const { data } = await api.get(`/events/${eventId}/submissions`, { headers: authHeaders });
       setSubmissions(data);
     } catch (err) { console.error('Submissions fetch error:', err); }
 

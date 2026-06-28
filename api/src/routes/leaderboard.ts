@@ -1,12 +1,18 @@
 import { Router, Response } from 'express';
 import pool from '../config/database';
+import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
 
 const router = Router();
 
-// GET /events/:eventId/leaderboard
-router.get('/events/:eventId/leaderboard', async (req, res: Response): Promise<void> => {
+// GET /events/:eventId/leaderboard — participants uniquement
+router.get('/events/:eventId/leaderboard', requireParticipant, async (req: ParticipantRequest, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId as string;
+
+    if (req.participant!.eventId !== eventId) {
+      res.status(403).json({ error: 'Accès refusé' });
+      return;
+    }
 
     const [eventRows] = await pool.execute('SELECT scoring_mode FROM events WHERE id = ?', [eventId]);
     const scoringMode = (eventRows as any[])[0]?.scoring_mode || 'winner';

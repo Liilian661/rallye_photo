@@ -3,7 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import multer from 'multer';
 import sharp from 'sharp';
 import pool from '../config/database';
-import { requireAuth, AuthRequest } from '../middleware/auth';
+import { requireAuth, AuthRequest, requireAuthOrParticipant, DualAuthRequest } from '../middleware/auth';
 // audit: HIGH-010 / HIGH-011 — auth participant derivee d'un token signe
 import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
 import { emitToEvent } from '../config/socket';
@@ -273,9 +273,24 @@ router.post('/events/:eventId/challenges/:challengeId/submit', rateLimiter(5, 60
 });
 
 // GET /events/:eventId/submissions
-router.get('/events/:eventId/submissions', async (req, res: Response): Promise<void> => {
+// Accepte JWT organisateur (doit posséder l'event) OU token participant (doit appartenir à l'event)
+router.get('/events/:eventId/submissions', requireAuthOrParticipant, async (req: DualAuthRequest, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId;
+
+    // Vérifier l'appartenance : organisateur doit posséder l'event, participant doit être membre
+    if (req.user) {
+      const [ownerRows] = await pool.execute('SELECT id FROM events WHERE id = ? AND user_id = ?', [eventId, req.user.userId]);
+      if ((ownerRows as any[]).length === 0) {
+        res.status(403).json({ error: 'Accès refusé' });
+        return;
+      }
+    } else if (req.participant) {
+      if (req.participant.eventId !== eventId) {
+        res.status(403).json({ error: 'Accès refusé' });
+        return;
+      }
+    }
     const [eventRows] = await pool.execute('SELECT photo_secret FROM events WHERE id = ?', [eventId]);
     const eventSecret = (eventRows as any[])[0]?.photo_secret;
 
@@ -300,12 +315,21 @@ router.get('/events/:eventId/submissions', async (req, res: Response): Promise<v
   }
 });
 
-// GET /challenges/:challengeId/submissions
-router.get('/challenges/:challengeId/submissions', async (req, res: Response): Promise<void> => {
+// GET /challenges/:challengeId/submissions — organisateur uniquement
+router.get('/challenges/:challengeId/submissions', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const challengeId = req.params.challengeId;
     const [challengeRows] = await pool.execute('SELECT event_id FROM challenges WHERE id = ?', [challengeId]);
     const eventId = (challengeRows as any[])[0]?.event_id;
+
+    // Vérifier que l'organisateur possède l'event lié au challenge
+    if (eventId) {
+      const [ownerRows] = await pool.execute('SELECT id FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
+      if ((ownerRows as any[]).length === 0) {
+        res.status(403).json({ error: 'Accès refusé' });
+        return;
+      }
+    }
     let eventSecret: string | null = null;
     if (eventId) {
       const [eventRows] = await pool.execute('SELECT photo_secret FROM events WHERE id = ?', [eventId]);
