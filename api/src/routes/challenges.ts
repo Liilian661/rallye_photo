@@ -5,42 +5,21 @@ import { requireAuth, AuthRequest } from '../middleware/auth';
 import { validateBody } from '../middleware/validateInput';
 import { createChallengeSchema } from '../utils/validators';
 import { emitToEvent } from '../config/socket';
-import { getEventLimit, EVENT_TIER_LIMITS, EventTier } from '../config/plans';
+import { getEventLimit } from '../config/plans';
 import { deleteFromS3 } from '../utils/s3Service';
 // audit: HIGH-008 / CRIT-001 — auth participant pour le vote
 import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
-// audit: HIGH-006 — detection optionnelle de l'organisateur (token user JWT)
-import { verifyAccessToken } from '../utils/crypto';
 import { rateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
-// audit: HIGH-006 — un organisateur authentifie ET PROPRIETAIRE de l'event voit TOUS
-// les defis (y compris les surprises non revelees pour les gerer) ; un visiteur ou
-// participant ne voit que les defis non-surprise ou deja reveles.
-async function isEventOwnerRequest(req: any, eventId: string): Promise<boolean> {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) return false;
-  try {
-    const decoded = verifyAccessToken(authHeader.split(' ')[1]);
-    const [rows] = await pool.execute(
-      'SELECT 1 FROM events WHERE id = ? AND user_id = ? LIMIT 1',
-      [eventId, decoded.userId]
-    );
-    return (rows as any[]).length > 0;
-  } catch {
-    return false;
-  }
-}
-
 // GET /events/:eventId/challenges
 router.get('/events/:eventId/challenges', rateLimiter(60, 60000), async (req, res: Response): Promise<void> => {
   try {
-    const ownerView = await isEventOwnerRequest(req, req.params.eventId as string);
-    const sql = ownerView
-      ? 'SELECT id, title, description, points, is_surprise, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? ORDER BY sort_order ASC, created_at ASC'
-      : 'SELECT id, title, description, points, is_surprise, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? AND (is_surprise = 0 OR notified = 1) ORDER BY sort_order ASC, created_at ASC';
-    const [rows] = await pool.execute(sql, [req.params.eventId]);
+    const [rows] = await pool.execute(
+      'SELECT id, title, description, points, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? ORDER BY sort_order ASC, created_at ASC',
+      [req.params.eventId]
+    );
     res.json(rows);
   } catch (error) {
     console.error('List challenges error:', error);
@@ -52,7 +31,7 @@ router.get('/events/:eventId/challenges', rateLimiter(60, 60000), async (req, re
 router.post('/events/:eventId/challenges', requireAuth, validateBody(createChallengeSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId as string;
-    const { title, description, points, isSurprise } = req.body;
+    const { title, description, points } = req.body;
 
     const [eventRows] = await pool.execute(
       'SELECT id, tier FROM events WHERE id = ? AND user_id = ?',
@@ -64,11 +43,6 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
     }
 
     const tier = (eventRows as any[])[0]?.tier || 'free';
-
-    // audit: LOW-029 — defis surprise reserves aux tiers premium/pro.
-    // Si le tier ne l'autorise pas, on force isSurprise=false plutot que de rejeter.
-    const surpriseAllowed = (EVENT_TIER_LIMITS[tier as EventTier] ?? EVENT_TIER_LIMITS.free).surpriseChallenges;
-    const effectiveIsSurprise = surpriseAllowed ? (isSurprise || false) : false;
 
     const [challengeCount] = await pool.execute(
       'SELECT COUNT(*) as count FROM challenges WHERE event_id = ?',
@@ -87,15 +61,13 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
     const id = uuidv4();
 
     await pool.execute(
-      'INSERT INTO challenges (id, event_id, title, description, points, is_surprise, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
-      [id, eventId, title, description || null, points, effectiveIsSurprise, count]
+      'INSERT INTO challenges (id, event_id, title, description, points, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+      [id, eventId, title, description || null, points, count]
     );
 
-    const challenge = { id, eventId, title, description, points, isSurprise: effectiveIsSurprise, status: 'active' };
+    const challenge = { id, eventId, title, description, points, status: 'active' };
 
-    if (!effectiveIsSurprise) {
-      emitToEvent(eventId, 'challenge-started', challenge);
-    }
+    emitToEvent(eventId, 'challenge-started', challenge);
 
     res.status(201).json(challenge);
   } catch (error) {
@@ -255,7 +227,7 @@ router.post('/events/:eventId/notify-challenges', requireAuth, async (req: AuthR
 
     // Get challenges that haven't been notified yet
     const [rows] = await pool.execute(
-      'SELECT id, title, points FROM challenges WHERE event_id = ? AND is_surprise = 0 AND notified = 0 ORDER BY sort_order ASC',
+      'SELECT id, title, points FROM challenges WHERE event_id = ? AND notified = 0 ORDER BY sort_order ASC',
       [eventId]
     );
     const newChallenges = rows as any[];

@@ -1,16 +1,29 @@
 import { Router, Response } from 'express';
 import pool from '../config/database';
-import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
+import { requireAuthOrParticipant, DualAuthRequest } from '../middleware/auth';
 
 const router = Router();
 
-// GET /events/:eventId/leaderboard — participants uniquement
-router.get('/events/:eventId/leaderboard', requireParticipant, async (req: ParticipantRequest, res: Response): Promise<void> => {
+// GET /events/:eventId/leaderboard — participants ou organisateur JWT
+router.get('/events/:eventId/leaderboard', requireAuthOrParticipant, async (req: DualAuthRequest, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId as string;
 
-    if (req.participant!.eventId !== eventId) {
-      res.status(403).json({ error: 'Accès refusé' });
+    if (req.participant) {
+      // token participant : vérifier appartenance à l'event
+      if (req.participant.eventId !== eventId) {
+        res.status(403).json({ error: 'Accès refusé' });
+        return;
+      }
+    } else if (req.user) {
+      // JWT organisateur : vérifier que l'event lui appartient
+      const [ownerRows] = await pool.execute('SELECT id FROM events WHERE id = ? AND user_id = ?', [eventId, req.user.userId]);
+      if ((ownerRows as any[]).length === 0) {
+        res.status(403).json({ error: 'Accès refusé' });
+        return;
+      }
+    } else {
+      res.status(401).json({ error: 'Authentification requise' });
       return;
     }
 

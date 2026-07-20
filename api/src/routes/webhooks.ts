@@ -2,10 +2,11 @@ import { Router, Request, Response } from 'express';
 import pool from '../config/database';
 import { logAudit } from '../utils/auditLog';
 import { sendProCancellationEmail } from '../utils/emailService';
+import { EVENT_CREDIT_PRICE } from '../config/plans';
 
 const router = Router();
 
-const CREDIT_PRICE_CENTS = 1200; // 12 € — doit rester aligne sur payments.ts
+const CREDIT_PRICE_CENTS = EVENT_CREDIT_PRICE * 100; // aligne sur EVENT_CREDIT_PRICE dans plans.ts
 
 /**
  * Marque un event Stripe comme traite (INSERT-first idempotence).
@@ -171,6 +172,15 @@ async function handleCheckoutCompleted(session: any, stripeEventId: string) {
         [userId]
       );
       const referralConverted = (refResult as any)?.affectedRows > 0;
+
+      // Crédit au parrain (transition converted → rewarded)
+      await conn.execute(
+        `UPDATE users u
+         JOIN referrals r ON r.referrer_id = u.id
+         SET u.event_credits = u.event_credits + 1, r.status = 'rewarded'
+         WHERE r.referred_id = ? AND r.status = 'converted'`,
+        [userId]
+      );
 
       await conn.commit();
 

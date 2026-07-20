@@ -19,7 +19,7 @@ const PARTICIPANT_KEY = crypto
   .update(JWT_SECRET + ':participant')
   .digest('hex');
 
-const PARTICIPANT_EXPIRES_IN = '30d';
+const PARTICIPANT_EXPIRES_IN = '7d';
 
 interface ParticipantClaims {
   pid: string;

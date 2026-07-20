@@ -2,6 +2,8 @@ import { Router, Response } from 'express';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { logAudit } from '../utils/auditLog';
 import { rateLimiter } from '../middleware/rateLimiter';
+import pool from '../config/database';
+import { EVENT_TIER_LIMITS } from '../config/plans';
 
 const router = Router();
 
@@ -9,7 +11,7 @@ const router = Router();
 // declenche un appel reseau sortant vers Stripe). 10 requetes / minute / IP.
 const checkoutLimiter = rateLimiter(10, 60 * 1000);
 
-const CREDIT_PRICE_CENTS      = 1200;  // 12 €
+const CREDIT_PRICE_CENTS      = 1200;  // 12 € — aligne sur EVENT_CREDIT_PRICE dans plans.ts
 const PRO_MONTHLY_PRICE_CENTS = 2400;  // 24 €/mois
 const PRO_YEARLY_PRICE_CENTS  = 19900; // 199 €/an (−31 %)
 
@@ -28,6 +30,13 @@ router.post('/checkout', checkoutLimiter, requireAuth, async (req: AuthRequest, 
     const panelUrl = process.env.PANEL_URL || 'https://panel.rallye-photo.com';
     const { type, quantity = 1, billing = 'monthly' } = req.body;
 
+    // Vérification email avant toute création de session Stripe
+    const [userRows] = await pool.execute('SELECT email_verified FROM users WHERE id = ?', [userId]);
+    if (!(userRows as any[])[0]?.email_verified) {
+      res.status(403).json({ error: 'Vérification email requise avant paiement', code: 'EMAIL_NOT_VERIFIED' });
+      return;
+    }
+
     if (type !== 'credit' && type !== 'pro') {
       res.status(400).json({ error: 'Type invalide. Valeurs acceptées : credit, pro' });
       return;
@@ -45,7 +54,7 @@ router.post('/checkout', checkoutLimiter, requireAuth, async (req: AuthRequest, 
             currency:     'eur',
             product_data: {
               name:        qty > 1 ? `${qty} × Crédit Événement` : 'Crédit Événement',
-              description: 'Débloque 1 événement premium (150 participants, galerie 60 jours)',
+              description: `Débloque 1 événement premium (${EVENT_TIER_LIMITS.premium.participants} participants, galerie ${EVENT_TIER_LIMITS.premium.galleryDays} jours)`,
             },
             unit_amount: CREDIT_PRICE_CENTS,
           },
@@ -113,6 +122,37 @@ router.post('/checkout', checkoutLimiter, requireAuth, async (req: AuthRequest, 
   } catch (error: any) {
     console.error('Stripe checkout error:', error.message);
     res.status(500).json({ error: 'Erreur lors de la création de la session de paiement' });
+  }
+});
+
+// POST /payments/billing-portal — redirige vers le portail Stripe (gestion abo/CB/factures)
+router.post('/billing-portal', checkoutLimiter, requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) {
+    res.status(503).json({ error: 'Paiement non disponible', code: 'STRIPE_NOT_CONFIGURED' });
+    return;
+  }
+  try {
+    const stripe = require('stripe')(stripeKey);
+    const userId = req.user!.userId;
+    const panelUrl = process.env.PANEL_URL || 'https://panel.rallye-photo.com';
+
+    const [rows] = await pool.execute('SELECT stripe_customer_id FROM users WHERE id = ?', [userId]);
+    const customerId = (rows as any[])[0]?.stripe_customer_id;
+    if (!customerId) {
+      res.status(404).json({ error: 'Aucun abonnement actif trouvé', code: 'NO_CUSTOMER' });
+      return;
+    }
+
+    const session = await stripe.billingPortal.sessions.create({
+      customer: customerId,
+      return_url: `${panelUrl}/dashboard/pricing`,
+    });
+
+    res.json({ url: session.url });
+  } catch (error: any) {
+    console.error('Billing portal error:', error.message);
+    res.status(500).json({ error: 'Erreur lors de la création du portail' });
   }
 });
 

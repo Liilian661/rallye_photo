@@ -55,6 +55,27 @@ interface Team {
   score: number;
 }
 
+interface Participant {
+  id: string;
+  name: string;
+  team_id: string | null;
+  joined_at: string;
+  team_name: string | null;
+  team_color: string | null;
+  submission_count?: number;
+}
+
+interface LeaderboardEntry {
+  rank: number;
+  id: string;
+  name: string;
+  teamName: string | null;
+  teamColor: string | null;
+  totalPoints: number;
+  totalSubmissions: number;
+  wins: number;
+}
+
 // audit: MED-025 — validation cote client de la taille/type des images (logo/banniere) AVANT upload.
 // L'attribut `accept` est un simple filtre UI contournable ; on verifie ici file.type et file.size.
 // La verite reste le serveur (taille/type/magic-bytes) — TODO: confirmer la validation backend.
@@ -104,8 +125,18 @@ export default function EventDetailPage() {
   const [newPoints, setNewPoints] = useState(10);
   const [showAddChallenge, setShowAddChallenge] = useState(false);
   const [previewIndex, setPreviewIndex] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'defis' | 'galerie'>('defis');
+  const [activeTab, setActiveTab] = useState<'defis' | 'galerie' | 'participants' | 'classement'>('defis');
   const [teams, setTeams] = useState<Team[]>([]);
+
+  // Participants
+  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [participantsLoading, setParticipantsLoading] = useState(false);
+  const [participantsError, setParticipantsError] = useState<string | null>(null);
+
+  // Classement
+  const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
+  const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [leaderboardError, setLeaderboardError] = useState<string | null>(null);
   const [newTeamName, setNewTeamName] = useState('');
   const [newTeamColor, setNewTeamColor] = useState('#e91e8c');
   const [showAddTeam, setShowAddTeam] = useState(false);
@@ -151,6 +182,45 @@ export default function EventDetailPage() {
   useEffect(() => {
     loadData();
   }, [loadData]);
+
+  // Charger la liste des participants
+  useEffect(() => {
+    if (!eventId) return;
+    const controller = new AbortController();
+    setParticipantsLoading(true);
+    setParticipantsError(null);
+    api.get(`/events/${eventId}/participants`, { signal: controller.signal })
+      .then(({ data }) => {
+        // Calculer le nombre de soumissions par participant depuis le state existant
+        setParticipants(data as Participant[]);
+        setParticipantsLoading(false);
+      })
+      .catch((err: any) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        setParticipantsError(err.response?.data?.error || 'Erreur lors du chargement des participants');
+        setParticipantsLoading(false);
+      });
+    return () => controller.abort();
+  }, [eventId]);
+
+  // Charger le classement organisateur
+  useEffect(() => {
+    if (!eventId) return;
+    const controller = new AbortController();
+    setLeaderboardLoading(true);
+    setLeaderboardError(null);
+    api.get(`/events/${eventId}/leaderboard`, { signal: controller.signal })
+      .then(({ data }) => {
+        setLeaderboard(data as LeaderboardEntry[]);
+        setLeaderboardLoading(false);
+      })
+      .catch((err: any) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        setLeaderboardError(err.response?.data?.error || 'Erreur lors du chargement du classement');
+        setLeaderboardLoading(false);
+      });
+    return () => controller.abort();
+  }, [eventId]);
 
   // WebSocket - real-time updates
   useEffect(() => {
@@ -657,7 +727,7 @@ export default function EventDetailPage() {
       </div>
 
       {/* Tabs */}
-      <div style={{ display: 'flex', gap: 4, marginBottom: 20 }}>
+      <div style={{ display: 'flex', gap: 4, marginBottom: 20, flexWrap: 'wrap' }}>
         <button
           onClick={() => setActiveTab('defis')}
           style={{
@@ -687,6 +757,36 @@ export default function EventDetailPage() {
           }}
         >
           Galerie ({submissions.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('participants')}
+          style={{
+            padding: '8px 22px',
+            borderRadius: 50,
+            border: 'none',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            background: activeTab === 'participants' ? 'var(--rp-accent)' : 'var(--rp-bg-card)',
+            color: activeTab === 'participants' ? 'var(--rp-accent-text)' : 'var(--rp-text-muted)',
+          }}
+        >
+          Participants ({participants.length})
+        </button>
+        <button
+          onClick={() => setActiveTab('classement')}
+          style={{
+            padding: '8px 22px',
+            borderRadius: 50,
+            border: 'none',
+            fontSize: 13,
+            fontWeight: 600,
+            cursor: 'pointer',
+            background: activeTab === 'classement' ? 'var(--rp-accent)' : 'var(--rp-bg-card)',
+            color: activeTab === 'classement' ? 'var(--rp-accent-text)' : 'var(--rp-text-muted)',
+          }}
+        >
+          Classement
         </button>
       </div>
 
@@ -1085,6 +1185,172 @@ export default function EventDetailPage() {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* ==================== PARTICIPANTS TAB ==================== */}
+      {activeTab === 'participants' && (
+        <div>
+          <h3 style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 20,
+            fontWeight: 600,
+            color: 'var(--rp-text-primary)',
+            marginBottom: 16,
+          }}>
+            Participants
+          </h3>
+          {participantsLoading && (
+            <p style={{ color: 'var(--rp-text-muted)', fontSize: 14 }}>Chargement...</p>
+          )}
+          {participantsError && (
+            <div style={{
+              background: 'rgba(239,68,68,0.08)', border: '1.5px solid var(--rp-danger-text)',
+              borderRadius: 12, padding: '12px 16px', marginBottom: 16,
+              fontSize: 14, color: 'var(--rp-danger-text)',
+            }}>
+              {participantsError}
+            </div>
+          )}
+          {!participantsLoading && !participantsError && participants.length === 0 && (
+            <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
+              <p style={{ color: 'var(--rp-text-muted)', fontSize: 15 }}>Aucun participant pour le moment</p>
+            </div>
+          )}
+          {!participantsLoading && participants.length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ borderBottom: '1px solid var(--rp-border)', background: 'var(--rp-bg-secondary)' }}>
+                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Nom</th>
+                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Equipe</th>
+                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Soumissions</th>
+                    <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Rejoint le</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {participants.map((p, idx) => {
+                    const subCount = submissions.filter(s => s.participant_id === p.id).length;
+                    return (
+                      <tr
+                        key={p.id}
+                        style={{
+                          borderBottom: idx < participants.length - 1 ? '0.5px solid var(--rp-border)' : 'none',
+                        }}
+                      >
+                        <td style={{ padding: '10px 16px', color: 'var(--rp-text-primary)', fontWeight: 600 }}>
+                          {p.name}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: 'var(--rp-text-muted)' }}>
+                          {p.team_name ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              {p.team_color && (
+                                <span style={{ width: 10, height: 10, borderRadius: '50%', background: p.team_color, display: 'inline-block', flexShrink: 0 }} />
+                              )}
+                              {p.team_name}
+                            </span>
+                          ) : (
+                            <span style={{ color: 'var(--rp-text-muted)', opacity: 0.5 }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: 'var(--rp-text-primary)' }}>
+                          {subCount}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: 'var(--rp-text-muted)' }}>
+                          {new Date(p.joined_at).toLocaleString('fr-FR', { dateStyle: 'short', timeStyle: 'short' })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ==================== CLASSEMENT TAB ==================== */}
+      {activeTab === 'classement' && (
+        <div>
+          <h3 style={{
+            fontFamily: 'var(--font-display)',
+            fontSize: 20,
+            fontWeight: 600,
+            color: 'var(--rp-text-primary)',
+            marginBottom: 16,
+          }}>
+            Classement
+          </h3>
+          {leaderboardLoading && (
+            <p style={{ color: 'var(--rp-text-muted)', fontSize: 14 }}>Chargement...</p>
+          )}
+          {leaderboardError && (
+            <div style={{
+              background: 'rgba(239,68,68,0.08)', border: '1.5px solid var(--rp-danger-text)',
+              borderRadius: 12, padding: '12px 16px', marginBottom: 16,
+              fontSize: 14, color: 'var(--rp-danger-text)',
+            }}>
+              {leaderboardError}
+            </div>
+          )}
+          {!leaderboardLoading && !leaderboardError && leaderboard.length === 0 && (
+            <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>
+              <p style={{ color: 'var(--rp-text-muted)', fontSize: 15 }}>Aucun participant au classement pour le moment</p>
+            </div>
+          )}
+          {!leaderboardLoading && leaderboard.length > 0 && (
+            <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                  <thead>
+                    <tr style={{ borderBottom: '1px solid var(--rp-border)', background: 'var(--rp-bg-secondary)' }}>
+                      <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Rang</th>
+                      <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Nom</th>
+                      <th style={{ padding: '10px 16px', textAlign: 'left', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Equipe</th>
+                      <th style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Points</th>
+                      <th style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 600, color: 'var(--rp-text-secondary)' }}>Soumissions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard.map((entry, idx) => (
+                      <tr
+                        key={entry.id}
+                        style={{
+                          borderBottom: idx < leaderboard.length - 1 ? '0.5px solid var(--rp-border)' : 'none',
+                          background: entry.rank <= 3 ? 'rgba(233,30,140,0.03)' : 'transparent',
+                        }}
+                      >
+                        <td style={{ padding: '10px 16px', fontWeight: 700, color: entry.rank === 1 ? '#f59e0b' : entry.rank === 2 ? '#9ca3af' : entry.rank === 3 ? '#b45309' : 'var(--rp-text-muted)' }}>
+                          {entry.rank === 1 ? '🥇' : entry.rank === 2 ? '🥈' : entry.rank === 3 ? '🥉' : `#${entry.rank}`}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: 'var(--rp-text-primary)', fontWeight: 600 }}>
+                          {entry.name}
+                        </td>
+                        <td style={{ padding: '10px 16px', color: 'var(--rp-text-muted)' }}>
+                          {entry.teamName ? (
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
+                              {entry.teamColor && (
+                                <span style={{ width: 10, height: 10, borderRadius: '50%', background: entry.teamColor, display: 'inline-block', flexShrink: 0 }} />
+                              )}
+                              {entry.teamName}
+                            </span>
+                          ) : (
+                            <span style={{ opacity: 0.5 }}>—</span>
+                          )}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', fontWeight: 700, color: 'var(--rp-accent)' }}>
+                          {entry.totalPoints}
+                        </td>
+                        <td style={{ padding: '10px 16px', textAlign: 'right', color: 'var(--rp-text-muted)' }}>
+                          {entry.totalSubmissions}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </div>
       )}
 

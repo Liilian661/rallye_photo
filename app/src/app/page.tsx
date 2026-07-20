@@ -9,7 +9,7 @@ export default function HomePage() {
   const [error, setError] = useState('');
   const router = useRouter();
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const trimmed = code.trim().toUpperCase();
     if (trimmed.length < 4) {
@@ -17,7 +17,11 @@ export default function HomePage() {
       return;
     }
     setLoading(true);
-    router.push(`/join/${trimmed}`);
+    try {
+      await router.push(`/join/${trimmed}`);
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (

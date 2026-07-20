@@ -31,6 +31,7 @@ export default function LeaderboardPage() {
 
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [participantId, setParticipantId] = useState('');
   const [hasTeams, setHasTeams] = useState(false);
 
@@ -44,6 +45,7 @@ export default function LeaderboardPage() {
   const loadLeaderboardRef = useRef<() => void>(() => {});
 
   const loadLeaderboard = useCallback(async () => {
+    setLoadError(false);
     try {
       const p = getParticipant(eventId);
       const headers = p?.participantToken ? { Authorization: `Bearer ${p.participantToken}` } : {};
@@ -52,6 +54,7 @@ export default function LeaderboardPage() {
       setHasTeams(data.some((e: LeaderboardEntry) => e.teamName));
     } catch (err) {
       console.error(err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -130,6 +133,13 @@ export default function LeaderboardPage() {
 
       {loading ? (
         <p style={{ textAlign: 'center', color: 'var(--rp-text-muted)' }}>Chargement...</p>
+      ) : loadError ? (
+        <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--rp-red)', fontSize: 15, marginBottom: 12 }}>Impossible de charger le classement</p>
+          <button className="btn-secondary" onClick={() => { setLoadError(false); setLoading(true); loadLeaderboard(); }}>
+            Réessayer
+          </button>
+        </div>
       ) : leaderboard.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
           <div style={{ marginBottom: 8 }}><IconTrophy size={36} color="var(--rp-text-muted)" /></div>

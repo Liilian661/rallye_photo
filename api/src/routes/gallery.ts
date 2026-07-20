@@ -2,11 +2,12 @@ import { Router, Response } from 'express';
 import pool from '../config/database';
 import { EVENT_TIER_LIMITS, EventTier } from '../config/plans';
 import { signPhotoToken } from '../utils/photoToken';
+import { rateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
 
 // GET /:eventId/gallery  (mounted on /events)
-router.get('/:eventId/gallery', async (req, res: Response): Promise<void> => {
+router.get('/:eventId/gallery', rateLimiter(30, 60000), async (req, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId as string;
 

@@ -79,6 +79,34 @@ function PricingContent() {
   const [error, setError]         = useState<string | null>(null);
   const [proYearly, setProYearly] = useState(false);
 
+  async function openBillingPortal() {
+    setLoading('billing-portal');
+    setError(null);
+    try {
+      const { data } = await api.post('/payments/billing-portal');
+      try {
+        const parsed = new URL(data.url);
+        const allowedDomains = ['stripe.com', 'rallye-photo.com'];
+        if (!allowedDomains.some(d => parsed.hostname === d || parsed.hostname.endsWith('.' + d))) {
+          throw new Error('URL de redirection invalide');
+        }
+      } catch {
+        setError('URL de redirection invalide');
+        setLoading(null);
+        return;
+      }
+      window.location.href = data.url;
+    } catch (err: any) {
+      if (err.response?.status === 404) {
+        setError('Aucun abonnement actif trouvé.');
+      } else {
+        const msg = err.response?.data?.error || 'Erreur lors de l\'accès au portail de facturation.';
+        setError(msg);
+      }
+      setLoading(null);
+    }
+  }
+
   const successType  = searchParams.get('success');   // 'credit' | 'pro'
   const wasCancelled = searchParams.get('cancelled') === '1';
 
@@ -337,13 +365,23 @@ function PricingContent() {
               )}
 
               {isProPlan && currentPlan === 'pro' && (
-                <button disabled style={{
-                  width: '100%', padding: '10px 20px', borderRadius: 50,
-                  border: '1.5px solid var(--rp-border)', background: 'transparent',
-                  color: 'var(--rp-text-muted)', fontSize: 14, fontWeight: 600, cursor: 'default',
-                }}>
-                  Plan actuel
-                </button>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button disabled style={{
+                    width: '100%', padding: '10px 20px', borderRadius: 50,
+                    border: '1.5px solid var(--rp-border)', background: 'transparent',
+                    color: 'var(--rp-text-muted)', fontSize: 14, fontWeight: 600, cursor: 'default',
+                  }}>
+                    Plan actuel
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    style={{ width: '100%', fontSize: 13, padding: '8px 20px' }}
+                    disabled={loading === 'billing-portal'}
+                    onClick={openBillingPortal}
+                  >
+                    {loading === 'billing-portal' ? 'Redirection…' : 'Gérer mon abonnement'}
+                  </button>
+                </div>
               )}
             </div>
           );

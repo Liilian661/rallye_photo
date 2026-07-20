@@ -18,24 +18,18 @@ export default function AdminLoginPage() {
     setLoading(true);
 
     try {
-      // Login via normal auth
-      const { data } = await api.post('/auth/login', { email, password });
-      // audit: HIGH-017 — durcir les cookies admin : secure (en prod) + sameSite strict,
-      // au lieu de cookies JS sans aucun attribut. TODO(httpOnly): faire poser ces cookies
-      // par l'API en Set-Cookie httpOnly + Secure + SameSite=Strict (cf COOKIE_OPTS).
-      Cookies.set('adminAccessToken', data.accessToken, { expires: 1, ...COOKIE_OPTS });
-      Cookies.set('adminRefreshToken', data.refreshToken, { expires: 30, ...COOKIE_OPTS });
-
-      // Check if user is admin
+      // Login — les tokens sont posés en cookies HttpOnly par l'API (withCredentials: true)
+      await api.post('/auth/login', { email, password });
+      // Nettoyer les éventuels tokens legacy
+      Cookies.remove('adminAccessToken');
+      Cookies.remove('adminRefreshToken');
+      // Vérifier isAdmin via /auth/me
       const { data: profile } = await api.get('/auth/me');
       if (!profile.isAdmin) {
-        Cookies.remove('adminAccessToken');
-        Cookies.remove('adminRefreshToken');
-        setError('Acces refuse - vous n\'etes pas administrateur');
+        setError('Accès refusé - vous n\'êtes pas administrateur');
         setLoading(false);
         return;
       }
-
       Cookies.set('adminUser', JSON.stringify(profile), { expires: 30, ...COOKIE_OPTS });
       router.push('/dashboard');
     } catch {

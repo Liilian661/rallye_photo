@@ -37,6 +37,7 @@ export default function ResultsPage() {
 
   const [winners, setWinners] = useState<RevealedWinner[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [participantId, setParticipantId] = useState('');
   const [newReveal, setNewReveal] = useState<RevealedWinner | null>(null);
 
@@ -55,6 +56,7 @@ export default function ResultsPage() {
   }, [eventId]);
 
   const loadResults = useCallback(async () => {
+    setLoadError(false);
     try {
       const p = getParticipant(eventId);
       const authHeaders = p?.participantToken ? { Authorization: `Bearer ${p.participantToken}` } : {};
@@ -86,6 +88,7 @@ export default function ResultsPage() {
       setWinners(revealedWinners);
     } catch (err) {
       console.error(err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -210,6 +213,13 @@ export default function ResultsPage() {
         <p style={{ textAlign: 'center', color: 'var(--rp-text-muted)' }}>
           Chargement...
         </p>
+      ) : loadError ? (
+        <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
+          <p style={{ color: 'var(--rp-red)', fontSize: 15, marginBottom: 12 }}>Impossible de charger les résultats</p>
+          <button className="btn-secondary" onClick={() => { setLoadError(false); setLoading(true); loadResults(); }}>
+            Réessayer
+          </button>
+        </div>
       ) : winners.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '2rem' }}>
           <div style={{ marginBottom: 8 }}><IconSparkles size={36} color="var(--rp-text-muted)" /></div>
