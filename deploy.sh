@@ -51,7 +51,7 @@ if [ "${RUN_MIGRATIONS:-1}" = "1" ]; then
     fi
     if [ -f "$DEPLOY_ROOT/$mig" ]; then
       echo "  - $mig"
-      mysql ${DB_HOST:+-h "$DB_HOST"} ${DB_USER:+-u "$DB_USER"} \
+      mysql --skip-ssl ${DB_HOST:+-h "$DB_HOST"} ${DB_USER:+-u "$DB_USER"} \
         ${DB_PASSWORD:+-p"$DB_PASSWORD"} "${DB_NAME:?DB_NAME requis pour les migrations}" \
         < "$DEPLOY_ROOT/$mig"
     else
