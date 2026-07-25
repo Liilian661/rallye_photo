@@ -36,12 +36,15 @@ export default function GalleryPage() {
   const [loadError, setLoadError] = useState('');
 
   useEffect(() => {
+    const controller = new AbortController();
+
     const load = async () => {
       try {
         setLoadError('');
-        const { data } = await api.get('/events/' + eventId + '/gallery');
+        const { data } = await api.get('/events/' + eventId + '/gallery', { signal: controller.signal });
         setGallery(data);
       } catch (err: any) {
+        if (err.name === 'AbortError' || err.name === 'CanceledError') return;
         if (err.response?.data?.code === 'GALLERY_EXPIRED') {
           setExpired(true);
           setExpiredAt(err.response.data.expiredAt || '');
@@ -53,7 +56,9 @@ export default function GalleryPage() {
         setLoading(false);
       }
     };
+
     load();
+    return () => controller.abort();
   }, [eventId]);
 
   useEffect(() => {

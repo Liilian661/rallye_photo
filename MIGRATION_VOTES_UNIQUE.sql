@@ -19,6 +19,6 @@
 --    AND v1.participant_id = v2.participant_id
 --    AND v1.id > v2.id;
 
+-- Idempotent : ADD UNIQUE IF NOT EXISTS (MariaDB 10.1+)
 ALTER TABLE votes
-  ADD CONSTRAINT uniq_vote_per_challenge_participant
-  UNIQUE (challenge_id, participant_id);
+  ADD UNIQUE IF NOT EXISTS uniq_vote_per_challenge_participant (challenge_id, participant_id);

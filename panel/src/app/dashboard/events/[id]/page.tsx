@@ -430,6 +430,7 @@ export default function EventDetailPage() {
     >
       {previewIndex > 0 && (
         <button
+          aria-label="Photo précédente"
           onClick={(e) => { e.stopPropagation(); setPreviewIndex(previewIndex - 1); }}
           style={{
             position: 'absolute',
@@ -478,6 +479,7 @@ export default function EventDetailPage() {
 
       {previewIndex < submissions.length - 1 && (
         <button
+          aria-label="Photo suivante"
           onClick={(e) => { e.stopPropagation(); setPreviewIndex(previewIndex + 1); }}
           style={{
             position: 'absolute',
@@ -493,6 +495,7 @@ export default function EventDetailPage() {
       )}
 
       <button
+        aria-label="Fermer"
         onClick={() => setPreviewIndex(null)}
         style={{
           position: 'absolute',
@@ -877,7 +880,7 @@ export default function EventDetailPage() {
                         </div>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                           <span className="badge badge-accent">{challenge.points} pts</span>
-                          <button onClick={() => deleteChallenge(challenge.id)} className="btn-ghost" style={{ display: 'flex', alignItems: 'center' }}><IconX size={16} /></button>
+                          <button aria-label="Supprimer le défi" onClick={() => deleteChallenge(challenge.id)} className="btn-ghost" style={{ display: 'flex', alignItems: 'center' }}><IconX size={16} /></button>
                         </div>
                       </div>
 
@@ -1145,7 +1148,7 @@ export default function EventDetailPage() {
                             <p style={{ fontSize: 11, color: 'var(--rp-text-muted)' }}>{team.member_count} membre{team.member_count > 1 ? 's' : ''} - {team.score} pts</p>
                           </div>
                         </div>
-                        <button onClick={() => deleteTeam(team.id)} className="btn-ghost" style={{ padding: 4 }}>
+                        <button aria-label="Supprimer l'équipe" onClick={() => deleteTeam(team.id)} className="btn-ghost" style={{ padding: 4 }}>
                           <IconX size={14} />
                         </button>
                       </div>
@@ -1219,6 +1222,7 @@ export default function EventDetailPage() {
           )}
           {!participantsLoading && participants.length > 0 && (
             <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+              <div style={{ overflowX: 'auto' }}>
               <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
                 <thead>
                   <tr style={{ borderBottom: '1px solid var(--rp-border)', background: 'var(--rp-bg-secondary)' }}>
@@ -1264,6 +1268,7 @@ export default function EventDetailPage() {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>

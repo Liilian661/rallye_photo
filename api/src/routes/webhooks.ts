@@ -87,6 +87,9 @@ router.post('/stripe', async (req: Request, res: Response): Promise<void> => {
       case 'customer.subscription.updated':
         await handleSubscriptionUpdated(event.data.object, stripeEventId);
         break;
+      case 'invoice.payment_failed':
+        await handleInvoicePaymentFailed(event.data.object, stripeEventId);
+        break;
       default:
         break;
     }
@@ -128,7 +131,14 @@ async function handleCheckoutCompleted(session: any, stripeEventId: string) {
       const parsed = parseInt(session.metadata?.quantity || '1', 10);
       const quantity = Math.max(1, Math.min(10, Number.isFinite(parsed) ? parsed : 1));
       const expectedTotal = quantity * CREDIT_PRICE_CENTS;
-      if (typeof session.amount_total === 'number' && session.amount_total !== expectedTotal) {
+      if (typeof session.amount_total !== 'number') {
+        console.error('[Webhook] amount_total absent sur session', session.id);
+        // Rollback sans erreur vers Stripe (idempotence) : on laisse Stripe relivrer
+        // si le champ finit par arriver, sans crediter a l'aveugle.
+        await conn.rollback();
+        return;
+      }
+      if (session.amount_total !== expectedTotal) {
         console.warn(
           '[Webhook] credit: amount_total mismatch — expected', expectedTotal,
           'got', session.amount_total, 'for user', userId
@@ -369,6 +379,50 @@ async function handleSubscriptionUpdated(subscription: any, stripeEventId: strin
 
     // Autres statuts (trialing, incomplete...) : event marque traite, pas de mutation.
     await conn.commit();
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function handleInvoicePaymentFailed(invoice: any, stripeEventId: string) {
+  const stripeCustomerId = invoice.customer as string;
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+
+    const isNew = await markEventProcessed(conn, stripeEventId, 'invoice.payment_failed');
+    if (!isNew) {
+      console.log('[Webhook] Duplicate event, skipping:', stripeEventId);
+      await conn.rollback();
+      return;
+    }
+
+    // Recuperer l'utilisateur pour pouvoir lui envoyer un email.
+    const [rows] = await conn.execute(
+      'SELECT id, email, first_name FROM users WHERE stripe_customer_id = ?',
+      [stripeCustomerId]
+    );
+    const user = (rows as any[])[0];
+
+    // Marquer l'event traite. Stripe gere lui-meme les retries de paiement ;
+    // on ne touche pas au plan ici.
+    await conn.commit();
+
+    if (!user) {
+      console.warn('[Webhook] invoice.payment_failed: no user found for Stripe customer', stripeCustomerId);
+      return;
+    }
+
+    // TODO: envoyer un email d'echec de paiement a l'utilisateur
+    // ex: sendPaymentFailedEmail(user.email, user.first_name, invoice)
+    console.warn(
+      '[Webhook] invoice.payment_failed for user', user.id,
+      '— Stripe gere les retries, statut plan inchange'
+    );
   } catch (err) {
     await conn.rollback();
     throw err;

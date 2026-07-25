@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import api from '@/lib/api';
-import { getParticipant } from '@/lib/participant';
+import { participantApi } from '@/lib/api';
+import { getParticipant, getParticipantToken } from '@/lib/participant';
 import { IconTrophy } from '@/lib/icons';
 import { io } from 'socket.io-client';
 
@@ -44,15 +44,14 @@ export default function LeaderboardPage() {
   // pour decoupler le useEffect socket (stable sur [eventId]).
   const loadLeaderboardRef = useRef<() => void>(() => {});
 
-  const loadLeaderboard = useCallback(async () => {
+  const loadLeaderboard = useCallback(async (signal?: AbortSignal) => {
     setLoadError(false);
     try {
-      const p = getParticipant(eventId);
-      const headers = p?.participantToken ? { Authorization: `Bearer ${p.participantToken}` } : {};
-      const { data } = await api.get(`/events/${eventId}/leaderboard`, { headers });
+      const { data } = await participantApi.get(`events/${eventId}/leaderboard`, { signal });
       setLeaderboard(data);
       setHasTeams(data.some((e: LeaderboardEntry) => e.teamName));
-    } catch (err) {
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'CanceledError') return;
       console.error(err);
       setLoadError(true);
     } finally {
@@ -65,27 +64,36 @@ export default function LeaderboardPage() {
   }, [loadLeaderboard]);
 
   useEffect(() => {
-    loadLeaderboard();
+    const controller = new AbortController();
+    loadLeaderboard(controller.signal);
+    return () => controller.abort();
   }, [loadLeaderboard]);
 
   useEffect(() => {
-    // audit: MED-013 — envoyer le token participant au handshake si disponible.
-    const participant = getParticipant(eventId) as ({ participantToken?: string } | null);
-    const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
-      transports: ['websocket', 'polling'],
-      auth: participant?.participantToken ? { token: participant.participantToken } : undefined,
+    let cancelled = false;
+    let socketInst: ReturnType<typeof io> | null = null;
+
+    getParticipantToken(eventId).then((token) => {
+      if (cancelled) return;
+      const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
+        transports: ['websocket', 'polling'],
+        auth: token ? { token } : undefined,
+      });
+      socketInst = socket;
+
+      socket.on('connect', () => { socket.emit('join-event', eventId); });
+      socket.on('leaderboard-updated', () => loadLeaderboardRef.current());
+      socket.on('winner-selected', () => loadLeaderboardRef.current());
+      socket.on('new-submission', () => loadLeaderboardRef.current());
     });
 
-    socket.on('connect', () => { socket.emit('join-event', eventId); });
-    socket.on('leaderboard-updated', () => loadLeaderboardRef.current());
-    socket.on('winner-selected', () => loadLeaderboardRef.current());
-    socket.on('new-submission', () => loadLeaderboardRef.current());
-
     return () => {
-      socket.emit('leave-event', eventId);
-      socket.disconnect();
+      cancelled = true;
+      if (socketInst) {
+        socketInst.emit('leave-event', eventId);
+        socketInst.disconnect();
+      }
     };
-    // audit: LOW-067 — dependances reduites a [eventId] pour une connexion stable.
   }, [eventId]);
 
   // Group by teams

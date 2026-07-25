@@ -41,8 +41,19 @@ initSocketServer(server);
 // ── IMPORTANT: raw body for Stripe webhook MUST come before express.json() ──
 app.use('/webhooks/stripe', express.raw({ type: 'application/json' }));
 
-// Middleware
-app.use(helmet());
+// Middleware — API JSON pur : CSP très restrictive (aucun rendu HTML)
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      'default-src': ["'none'"],
+      'frame-ancestors': ["'none'"],
+      'base-uri':       ["'none'"],
+      'form-action':    ["'none'"],
+    },
+  },
+  // X-Frame-Options: DENY déjà posé par Helmet par défaut
+  crossOriginOpenerPolicy: { policy: 'same-origin' },
+}));
 
 // audit: LOW-048 — trim + filtre des origines vides (virgule finale / espaces)
 const corsOrigins = (process.env.CORS_ORIGINS || '')

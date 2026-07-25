@@ -68,12 +68,12 @@ async function checkRateRedis(
 
 // --- Logique Map locale ---
 function checkRateLocal(
-  ip: string,
+  key: string,
   maxRequests: number,
   windowMs: number,
   now: number
 ): boolean {
-  const record = requests.get(ip);
+  const record = requests.get(key);
 
   if (!record || now > record.resetTime) {
     // audit: MED-012 — borne de taille + nettoyage lazy avant insertion
@@ -86,7 +86,7 @@ function checkRateLocal(
         if (oldest !== undefined) requests.delete(oldest);
       }
     }
-    requests.set(ip, { count: 1, resetTime: now + windowMs });
+    requests.set(key, { count: 1, resetTime: now + windowMs });
     return true;
   }
 
@@ -109,7 +109,7 @@ export function rateLimiter(maxRequests: number, windowMs: number) {
     // Tenter Redis si disponible et connecte
     if (redis && redis.status === 'ready') {
       try {
-        const redisKey = `rl:${ip}`;
+        const redisKey = `rl:${maxRequests}:${windowSecs}:${ip}`;
         const allowed = await checkRateRedis(redisKey, maxRequests, windowSecs);
         if (!allowed) {
           res.status(429).json({ error: 'Trop de requetes, reessayez plus tard' });
@@ -124,7 +124,7 @@ export function rateLimiter(maxRequests: number, windowMs: number) {
     }
 
     // Fallback Map locale
-    const allowed = checkRateLocal(ip, maxRequests, windowMs, now);
+    const allowed = checkRateLocal(`rl:${maxRequests}:${windowSecs}:${ip}`, maxRequests, windowMs, now);
     if (!allowed) {
       res.status(429).json({ error: 'Trop de requetes, reessayez plus tard' });
       return;

@@ -1,9 +1,17 @@
 import { Router, Response } from 'express';
+import { z } from 'zod';
 import { requireAuth, AuthRequest } from '../middleware/auth';
+import { validateBody } from '../middleware/validateInput';
 import { logAudit } from '../utils/auditLog';
 import { rateLimiter } from '../middleware/rateLimiter';
 import pool from '../config/database';
 import { EVENT_TIER_LIMITS } from '../config/plans';
+
+const checkoutSchema = z.object({
+  type:     z.enum(['credit', 'pro']),
+  quantity: z.number().int().min(1).max(10).optional().default(1),
+  billing:  z.enum(['monthly', 'yearly']).optional().default('monthly'),
+});
 
 const router = Router();
 
@@ -17,7 +25,7 @@ const PRO_YEARLY_PRICE_CENTS  = 19900; // 199 €/an (−31 %)
 
 // POST /payments/checkout
 // Body: { type: 'credit', quantity?: number } | { type: 'pro' }
-router.post('/checkout', checkoutLimiter, requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+router.post('/checkout', checkoutLimiter, requireAuth, validateBody(checkoutSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   const stripeKey = process.env.STRIPE_SECRET_KEY;
   if (!stripeKey) {
     res.status(503).json({ error: 'Paiement non disponible', code: 'STRIPE_NOT_CONFIGURED' });

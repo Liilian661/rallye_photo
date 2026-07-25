@@ -301,13 +301,13 @@ router.get('/events/:eventId/submissions', requireAuthOrParticipant, async (req:
 
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
     const submissions = rows as any[];
-    for (const sub of submissions) {
+    await Promise.all(submissions.map(async (sub: any) => {
       if (eventSecret && sub.photo_key) {
         const token = await signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
         sub.photo_url = apiBase + '/photos/' + token;
       }
       delete sub.photo_key;
-    }
+    }));
 
     res.json(submissions);
   } catch (error) {
@@ -347,12 +347,12 @@ router.get('/challenges/:challengeId/submissions', requireAuth, async (req: Auth
 
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
     const submissions = rows as any[];
-    for (const sub of submissions) {
+    await Promise.all(submissions.map(async (sub: any) => {
       if (eventSecret && eventId && sub.photo_key) {
         const token = await signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
         sub.photo_url = apiBase + '/photos/' + token;
       }
-    }
+    }));
 
     res.json(submissions);
   } catch (error) {
@@ -365,7 +365,7 @@ router.get('/challenges/:challengeId/submissions', requireAuth, async (req: Auth
 router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const [rows] = await pool.execute(
-      'SELECT s.id, s.photo_key, s.event_id FROM submissions s JOIN events e ON e.id = s.event_id WHERE s.id = ? AND e.user_id = ?',
+      'SELECT s.id, s.photo_key, s.event_id, s.challenge_id FROM submissions s JOIN events e ON e.id = s.event_id WHERE s.id = ? AND e.user_id = ?',
       [req.params.id, req.user!.userId]
     );
     if ((rows as any[]).length === 0) {
@@ -373,11 +373,12 @@ router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Res
       return;
     }
     const submission = (rows as any[])[0];
+    // S3 d'abord (best-effort), puis DELETE en DB pour eviter les orphelins S3 si le DELETE echoue
     try { await deleteFromS3(submission.photo_key); } catch (error) {
       console.error('S3 delete error (continuing):', error);
     }
     await pool.execute('DELETE FROM submissions WHERE id = ?', [req.params.id]);
-    emitToEvent(submission.event_id, 'new-submission', {});
+    emitToEvent(submission.event_id, 'submission-deleted', { submissionId: req.params.id, challengeId: submission.challenge_id, eventId: submission.event_id });
     res.json({ message: 'Supprime' });
   } catch (error) {
     console.error('Delete submission error:', error);
@@ -393,7 +394,7 @@ router.delete('/submissions/:id/participant', requireParticipant, async (req: Pa
     const { id } = req.params;
     const participantId = req.participant!.participantId;
     const [rows] = await pool.execute(
-      'SELECT s.id, s.photo_key, s.event_id FROM submissions s WHERE s.id = ? AND s.participant_id = ?',
+      'SELECT s.id, s.photo_key, s.event_id, s.challenge_id FROM submissions s WHERE s.id = ? AND s.participant_id = ?',
       [id, participantId]
     );
     if ((rows as any[]).length === 0) {
@@ -411,11 +412,12 @@ router.delete('/submissions/:id/participant', requireParticipant, async (req: Pa
       res.status(403).json({ error: 'La deadline est depassee' });
       return;
     }
+    // S3 d'abord (best-effort), puis DELETE en DB pour eviter les orphelins S3 si le DELETE echoue
     try { await deleteFromS3(submission.photo_key); } catch (error) {
       console.error('S3 delete error (continuing):', error);
     }
     await pool.execute('DELETE FROM submissions WHERE id = ?', [id]);
-    emitToEvent(submission.event_id, 'new-submission', {});
+    emitToEvent(submission.event_id, 'submission-deleted', { submissionId: id, challengeId: submission.challenge_id, eventId: submission.event_id });
     res.json({ message: 'Supprime' });
   } catch (error) {
     console.error('Participant delete submission error:', error);

@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../config/database';
 import { requireAuth, AuthRequest } from '../middleware/auth';
@@ -119,13 +120,59 @@ router.delete('/teams/:id', requireAuth, async (req: AuthRequest, res: Response)
       return;
     }
 
-    // Remove team_id from participants
-    await pool.execute('UPDATE participants SET team_id = NULL WHERE team_id = ?', [req.params.id]);
-    await pool.execute('DELETE FROM teams WHERE id = ?', [req.params.id]);
+    // Transaction : nullifier team_id sur les participants, puis supprimer l'equipe
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      await conn.execute('UPDATE participants SET team_id = NULL WHERE team_id = ?', [req.params.id]);
+      await conn.execute('DELETE FROM teams WHERE id = ?', [req.params.id]);
+      await conn.commit();
+    } catch (txErr) {
+      await conn.rollback();
+      throw txErr;
+    } finally {
+      conn.release();
+    }
 
     res.json({ message: 'Equipe supprimee' });
   } catch (error) {
     console.error('Delete team error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /teams/:teamId - Rename a team
+const updateTeamSchema = z.object({
+  name: z.string().min(1).max(100).trim(),
+});
+
+router.patch('/teams/:teamId', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { teamId } = req.params;
+
+    const parsed = updateTeamSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Donnees invalides', details: parsed.error.issues.map(e => e.message) });
+      return;
+    }
+    const { name } = parsed.data;
+
+    // Verifier l'ownership via event_id (la team doit appartenir a un event de l'utilisateur)
+    const [rows] = await pool.execute(
+      'SELECT t.id, t.event_id FROM teams t JOIN events e ON e.id = t.event_id WHERE t.id = ? AND e.user_id = ?',
+      [teamId, req.user!.userId]
+    );
+    if ((rows as any[]).length === 0) {
+      res.status(404).json({ error: 'Equipe non trouvee' });
+      return;
+    }
+    const team = (rows as any[])[0];
+
+    await pool.execute('UPDATE teams SET name = ? WHERE id = ?', [name, teamId]);
+
+    res.json({ id: teamId, eventId: team.event_id, name });
+  } catch (error) {
+    console.error('Update team error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

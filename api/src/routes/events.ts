@@ -35,7 +35,7 @@ router.get('/', requireAuth, async (req: AuthRequest, res: Response): Promise<vo
 });
 
 // POST /events
-router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthRequest, res: Response): Promise<void> => {
+router.post('/', requireAuth, rateLimiter(5, 60000), validateBody(createEventSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { name, description, eventDate, deadline, scoringMode, teamMode } = req.body;
     const userId = req.user!.userId;
@@ -60,24 +60,6 @@ router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthR
     // Déterminer le tier du nouvel événement
     const tier = resolveEventTier(plan, credits);
 
-    // Pour les events gratuits : vérifier la limite d'events free actifs
-    if (tier === 'free') {
-      const maxFreeEvents = plan === 'pro' ? -1 : USER_PLANS.free.maxFreeEvents;
-      if (maxFreeEvents !== -1) {
-        const [existingFree] = await pool.execute(
-          "SELECT COUNT(*) as count FROM events WHERE user_id = ? AND tier = 'free'",
-          [userId]
-        );
-        if ((existingFree as any[])[0].count >= maxFreeEvents) {
-          res.status(403).json({
-            error: 'Vous avez atteint la limite d\'evenements gratuits. Achetez un credit Event ou passez au Pro.',
-            code: 'FREE_LIMIT_REACHED',
-          });
-          return;
-        }
-      }
-    }
-
     const id = uuidv4();
     const code = await generateUniqueEventCode();
     const photoSecret = generateEventPhotoSecret();
@@ -92,6 +74,25 @@ router.post('/', requireAuth, validateBody(createEventSchema), async (req: AuthR
     let finalTier = tier;
     try {
       await conn.beginTransaction();
+
+      // Pour les events gratuits : vérifier la limite d'events free actifs (FOR UPDATE evite la race condition)
+      if (tier === 'free') {
+        const maxFreeEvents = plan === 'pro' ? -1 : USER_PLANS.free.maxFreeEvents;
+        if (maxFreeEvents !== -1) {
+          const [existingFree] = await conn.execute(
+            "SELECT COUNT(*) as count FROM events WHERE user_id = ? AND tier = 'free' FOR UPDATE",
+            [userId]
+          );
+          if ((existingFree as any[])[0].count >= maxFreeEvents) {
+            await conn.rollback();
+            res.status(403).json({
+              error: "Vous avez atteint la limite d'evenements gratuits. Achetez un credit Event ou passez au Pro.",
+              code: 'FREE_LIMIT_REACHED',
+            });
+            return;
+          }
+        }
+      }
 
       if (tier === 'premium') {
         const [decrement]: any = await conn.execute(
@@ -250,10 +251,14 @@ router.patch('/:id', requireAuth, validateBody(updateEventSchema), async (req: A
 
     values.push(req.params.id, req.user!.userId);
 
-    await pool.execute(
+    const [result] = await pool.execute(
       'UPDATE events SET ' + fields.join(', ') + ' WHERE id = ? AND user_id = ?',
       values
     );
+    if ((result as any).affectedRows === 0) {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
 
     res.json({ message: 'Evenement mis a jour' });
   } catch (error) {

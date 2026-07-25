@@ -7,17 +7,20 @@ import { emitToEvent } from '../config/socket';
 import { getEventLimit } from '../config/plans';
 // audit: CRIT-001 — token participant signe emis au join, et garde sur la liste
 import { signParticipantToken, requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
+import { rateLimiter } from '../middleware/rateLimiter';
+import { requireAuth, AuthRequest } from '../middleware/auth';
+import { deleteFromS3 } from '../utils/s3Service';
 
 const router = Router();
 
 // POST /events/:eventId/join
-router.post('/events/:eventId/join', validateBody(joinEventSchema), async (req, res: Response): Promise<void> => {
+router.post('/events/:eventId/join', rateLimiter(10, 60000), validateBody(joinEventSchema), async (req, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId as string;
     const { name, deviceId, teamId } = req.body;
 
     const [eventRows] = await pool.execute(
-      'SELECT id, status, deadline, team_mode FROM events WHERE id = ?',
+      'SELECT id, status, deadline, team_mode, tier FROM events WHERE id = ?',
       [eventId]
     );
     if ((eventRows as any[]).length === 0) {
@@ -26,28 +29,13 @@ router.post('/events/:eventId/join', validateBody(joinEventSchema), async (req, 
     }
 
     const event = (eventRows as any[])[0];
-    if (event.status === 'archived') {
+    if (event.status !== 'active') {
       res.status(410).json({ error: 'Cet evenement est termine' });
       return;
     }
 
-    const [eventTierRows] = await pool.execute(
-      'SELECT tier FROM events WHERE id = ?',
-      [eventId]
-    );
-    const tier = (eventTierRows as any[])[0]?.tier || 'free';
+    const tier = event.tier || 'free';
     const participantLimit = getEventLimit(tier, 'participants');
-
-    const [participantCount] = await pool.execute(
-      'SELECT COUNT(*) as count FROM participants WHERE event_id = ?',
-      [eventId]
-    );
-    const count = (participantCount as any[])[0].count;
-
-    if (count >= participantLimit) {
-      res.status(403).json({ error: 'Nombre maximum de participants atteint pour cet evenement' });
-      return;
-    }
 
     // audit: LOW-023 — ne rattacher a une equipe que si team_mode est actif,
     // et valider l'appartenance de l'equipe a CET event des qu'un teamId est fourni.
@@ -104,10 +92,30 @@ router.post('/events/:eventId/join', validateBody(joinEventSchema), async (req, 
 
     const id = uuidv4();
 
-    await pool.execute(
-      'INSERT INTO participants (id, event_id, name, device_id, team_id) VALUES (?, ?, ?, ?, ?)',
-      [id, eventId, name, deviceId || null, effectiveTeamId]
-    );
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [countRows] = await conn.execute(
+        'SELECT COUNT(*) as count FROM participants WHERE event_id = ? FOR UPDATE',
+        [eventId]
+      );
+      const count = (countRows as any[])[0].count;
+      if (count >= participantLimit) {
+        await conn.rollback();
+        res.status(403).json({ error: 'Nombre maximum de participants atteint pour cet evenement' });
+        return;
+      }
+      await conn.execute(
+        'INSERT INTO participants (id, event_id, name, device_id, team_id) VALUES (?, ?, ?, ?, ?)',
+        [id, eventId, name, deviceId || null, effectiveTeamId]
+      );
+      await conn.commit();
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
 
     emitToEvent(eventId, 'participant-joined', { id, name, teamId: effectiveTeamId });
 
@@ -137,6 +145,54 @@ router.get('/events/:eventId/participants', requireParticipant, async (req: Part
     res.json(rows);
   } catch (error) {
     console.error('List participants error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// DELETE /events/:eventId/participants/:participantId
+router.delete('/events/:eventId/participants/:participantId', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { eventId, participantId } = req.params;
+
+    // Verify event ownership
+    const [eventRows] = await pool.execute(
+      'SELECT id FROM events WHERE id = ? AND user_id = ?',
+      [eventId, req.user!.userId]
+    );
+    if ((eventRows as any[]).length === 0) {
+      res.status(404).json({ error: 'Evenement non trouve' });
+      return;
+    }
+
+    // Collect S3 keys for participant's submissions
+    const [subRows] = await pool.execute(
+      'SELECT photo_key FROM submissions WHERE event_id = ? AND participant_id = ? AND photo_key IS NOT NULL',
+      [eventId, participantId]
+    );
+    const s3Keys: string[] = (subRows as any[]).map((s: any) => s.photo_key);
+
+    // Delete participant's submissions then the participant
+    await pool.execute('DELETE FROM submissions WHERE event_id = ? AND participant_id = ?', [eventId, participantId]);
+    const [deleteResult] = await pool.execute(
+      'DELETE FROM participants WHERE id = ? AND event_id = ?',
+      [participantId, eventId]
+    );
+    if ((deleteResult as any).affectedRows === 0) {
+      res.status(404).json({ error: 'Participant non trouve' });
+      return;
+    }
+
+    // Delete S3 files (non-blocking)
+    if (s3Keys.length > 0) {
+      Promise.all(s3Keys.map(key => deleteFromS3(key).catch(err => console.error('S3 delete error for', key, err)))).catch(() => {});
+    }
+
+    // Notify connected clients
+    emitToEvent(eventId, 'participant-removed', { participantId });
+
+    res.json({ message: 'Participant expulse' });
+  } catch (error) {
+    console.error('Remove participant error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

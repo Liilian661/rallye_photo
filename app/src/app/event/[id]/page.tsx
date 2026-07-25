@@ -1,9 +1,9 @@
 'use client';
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import api from '@/lib/api';
-import { getParticipant } from '@/lib/participant';
+import api, { participantApi } from '@/lib/api';
+import { getParticipant, getParticipantToken } from '@/lib/participant';
 import { IconCamera, IconCheckCircle, IconLock, IconClock, IconAlarm, IconLoader, IconGallery, IconX } from '@/lib/icons';
 import CameraModal from '@/components/CameraModal';
 import { io, Socket } from 'socket.io-client';
@@ -86,14 +86,6 @@ export default function EventPage() {
   const eventId = params.id as string;
   const socketRef = useRef<Socket | null>(null);
 
-  // audit: CRIT-001 — entetes Authorization derivees du token participant signe.
-  // Si le token manque (ancien localStorage), le backend repond 401 et l'utilisateur
-  // rejoint a nouveau ; on n'ajoute pas d'entete vide.
-  const authHeaders = useCallback((): Record<string, string> => {
-    const token = getParticipant(eventId)?.participantToken;
-    return token ? { Authorization: 'Bearer ' + token } : {};
-  }, [eventId]);
-
   const [event, setEvent] = useState<EventInfo | null>(null);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
@@ -129,32 +121,42 @@ export default function EventPage() {
     });
   }, [eventId, router]);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (signal?: AbortSignal) => {
     const p = getParticipant(eventId);
     if (p?.eventCode) {
       try {
-        const { data } = await api.get(`/events/join/${p.eventCode}`);
+        const { data } = await api.get(`/events/join/${p.eventCode}`, { signal });
         setEvent(data);
-      } catch (err) { console.error('Event fetch error:', err); }
+      } catch (err: any) {
+        if (err.name === 'AbortError' || err.name === 'CanceledError') return;
+        console.error('Event fetch error:', err);
+      }
     }
 
     try {
-      const { data } = await api.get(`/events/${eventId}/challenges`);
+      const { data } = await api.get(`/events/${eventId}/challenges`, { signal });
       setChallenges(data);
-    } catch (err) { console.error('Challenges fetch error:', err); }
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'CanceledError') return;
+      console.error('Challenges fetch error:', err);
+    }
 
     try {
-      const p2 = getParticipant(eventId);
-      const authHeaders = p2?.participantToken ? { Authorization: `Bearer ${p2.participantToken}` } : {};
-      const { data } = await api.get(`/events/${eventId}/submissions`, { headers: authHeaders });
+      const { data } = await participantApi.get(`events/${eventId}/submissions`, { signal });
       setSubmissions(data);
-    } catch (err) { console.error('Submissions fetch error:', err); }
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'CanceledError') return;
+      console.error('Submissions fetch error:', err);
+    }
 
     setLoading(false);
   }, [eventId]);
 
   useEffect(() => {
-    if (participantId) loadData();
+    if (!participantId) return;
+    const controller = new AbortController();
+    loadData(controller.signal);
+    return () => controller.abort();
   }, [participantId, loadData]);
 
   // Apply theme color
@@ -198,31 +200,43 @@ export default function EventPage() {
   useEffect(() => {
     if (!eventId) return;
 
-    const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
-      transports: ['websocket', 'polling'],
+    let cancelled = false;
+    let socketInst: ReturnType<typeof io> | null = null;
+
+    // Token fetched server-side from HttpOnly cookie — never stored in sessionStorage
+    getParticipantToken(eventId).then((token) => {
+      if (cancelled) return;
+
+      const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
+        transports: ['websocket', 'polling'],
+        auth: token ? { token } : undefined,
+      });
+      socketInst = socket;
+
+      socket.on('connect', () => { socket.emit('join-event', eventId); });
+      socket.on('new-submission', () => loadData());
+      socket.on('participant-joined', () => loadData());
+      socket.on('challenge-started', () => loadData());
+      socket.on('winner-selected', () => loadData());
+      socket.on('winner-revealed', () => loadData());
+      socket.on('leaderboard-updated', () => loadData());
+      socket.on('online-count', (count: number) => setOnlineCount(count));
+      socket.on('new-challenges-alert', (data: any) => {
+        if (data && data.challenges) {
+          setAlertChallenges(data.challenges);
+          loadData();
+        }
+      });
+
+      socketRef.current = socket;
     });
-
-    socket.on('connect', () => { socket.emit('join-event', eventId); });
-
-    socket.on('new-submission', () => loadData());
-    socket.on('participant-joined', () => loadData());
-    socket.on('challenge-started', () => loadData());
-    socket.on('winner-selected', () => loadData());
-    socket.on('winner-revealed', () => loadData());
-    socket.on('leaderboard-updated', () => loadData());
-    socket.on('online-count', (count: number) => setOnlineCount(count));
-    socket.on('new-challenges-alert', (data: any) => {
-      if (data && data.challenges) {
-        setAlertChallenges(data.challenges);
-        loadData();
-      }
-    });
-
-    socketRef.current = socket;
 
     return () => {
-      socket.emit('leave-event', eventId);
-      socket.disconnect();
+      cancelled = true;
+      if (socketInst) {
+        socketInst.emit('leave-event', eventId);
+        socketInst.disconnect();
+      }
     };
   }, [eventId, loadData]);
 
@@ -238,16 +252,10 @@ export default function EventPage() {
         const fileToUpload = isVideoFile ? file : await compressImage(file);
         const formData = new FormData();
         formData.append('photo', fileToUpload, fileToUpload.name);
-        // audit: CRIT-001 — Bearer token participant ; ne pas forcer Content-Type
-        // (axios gere le boundary multipart). Le token est lu depuis l'event cible.
-        const queueToken = getParticipant(item.eventId)?.participantToken;
-        await api.post(
-          `/events/${item.eventId}/challenges/${item.challengeId}/submit`,
+        await participantApi.post(
+          `events/${item.eventId}/challenges/${item.challengeId}/submit`,
           formData,
-          {
-            headers: queueToken ? { Authorization: 'Bearer ' + queueToken } : {},
-            timeout: isVideoFile ? 120000 : 60000,
-          }
+          { timeout: isVideoFile ? 120000 : 60000 }
         );
         await removeFromQueue(item.id);
       } catch {
@@ -320,13 +328,10 @@ export default function EventPage() {
       const formData = new FormData();
       formData.append('photo', fileToUpload, fileToUpload.name || (isVideoFile ? 'video.webm' : 'photo.jpg'));
 
-      await api.post(
-        `/events/${eventId}/challenges/${challengeId}/submit`,
+      await participantApi.post(
+        `events/${eventId}/challenges/${challengeId}/submit`,
         formData,
         {
-          // audit: CRIT-001 — Bearer token participant ; pas de Content-Type force
-          // (axios gere le boundary multipart).
-          headers: authHeaders(),
           timeout: isVideoFile ? 120000 : 60000,
           onUploadProgress: (progressEvent: any) => {
             if (progressEvent.total) {
@@ -385,16 +390,22 @@ export default function EventPage() {
     input.click();
   };
 
-  const mySubmissions = submissions.filter(s => s.participant_id === participantId);
+  const mySubmissions = useMemo(
+    () => submissions.filter(s => s.participant_id === participantId),
+    [submissions, participantId]
+  );
   const hasSubmitted = (challengeId: string) => mySubmissions.some(s => s.challenge_id === challengeId);
   const getMySubmission = (challengeId: string) => mySubmissions.find(s => s.challenge_id === challengeId);
 
   // Trier : defis non faits en premier, puis defis faits
-  const sortedChallenges = [...challenges].sort((a, b) => {
-    const aSubmitted = hasSubmitted(a.id) ? 1 : 0;
-    const bSubmitted = hasSubmitted(b.id) ? 1 : 0;
-    return aSubmitted - bSubmitted;
-  });
+  const sortedChallenges = useMemo(
+    () => [...challenges].sort((a, b) => {
+      const aSubmitted = mySubmissions.some(s => s.challenge_id === a.id) ? 1 : 0;
+      const bSubmitted = mySubmissions.some(s => s.challenge_id === b.id) ? 1 : 0;
+      return aSubmitted - bSubmitted;
+    }),
+    [challenges, mySubmissions]
+  );
 
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
@@ -402,8 +413,7 @@ export default function EventPage() {
     if (!confirm('Supprimer cette photo ?')) return;
     setDeletingId(submissionId);
     try {
-      // audit: HIGH-010 — plus de participantId dans l'URL ; identite derivee du token (Bearer).
-      await api.delete('/submissions/' + submissionId + '/participant', { headers: authHeaders() });
+      await participantApi.delete(`submissions/${submissionId}/participant?_eid=${eventId}`);
       await loadData();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur lors de la suppression');
@@ -428,7 +438,11 @@ export default function EventPage() {
       {/* Lightbox fullscreen */}
       {previewUrl && (
         <div
+          role="dialog"
+          aria-modal="true"
           onClick={() => setPreviewUrl(null)}
+          onKeyDown={(e) => { if (e.key === 'Escape') setPreviewUrl(null); }}
+          tabIndex={-1}
           style={{
             position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
             background: 'rgba(0,0,0,0.92)', display: 'flex',
@@ -613,8 +627,16 @@ export default function EventPage() {
               <div
                 key={challenge.id}
                 className="card-challenge"
+                role={!submitted && !isPastDeadline && !isUploading ? 'button' : undefined}
+                tabIndex={!submitted && !isPastDeadline && !isUploading ? 0 : undefined}
                 onClick={() => {
                   if (!submitted && !isPastDeadline && !isUploading) {
+                    setExpandedChallenge(isExpanded ? null : challenge.id);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (!submitted && !isPastDeadline && !isUploading && (e.key === 'Enter' || e.key === ' ')) {
+                    e.preventDefault();
                     setExpandedChallenge(isExpanded ? null : challenge.id);
                   }
                 }}

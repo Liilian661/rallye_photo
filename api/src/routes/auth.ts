@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import crypto from 'crypto';
 import pool from '../config/database';
@@ -510,7 +511,8 @@ router.post('/logout', requireAuth, async (req: AuthRequest, res: Response): Pro
     // audit: LOW-006 — logout fiable : si un refreshToken est fourni, on revoque toute sa
     // FAMILLE (et plus seulement la ligne presentee), afin qu'aucun token rotatif issu de la
     // meme session ne reste actif. Optionnellement, allDevices revoque toutes les sessions.
-    if (allDevices) {
+    // Comparaison stricte === true : rejeter les valeurs truthy non booleennes (ex: "yes", 1).
+    if (allDevices === true) {
       await pool.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [req.user!.userId]);
     } else if (refreshToken) {
       const tokenHash = hashToken(refreshToken);
@@ -572,6 +574,74 @@ router.get('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<
     });
   } catch (error) {
     console.error('Me error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /auth/me
+const updateMeSchema = z.object({
+  firstName: z.string().min(1).max(100).trim().optional(),
+  lastName:  z.string().min(1).max(100).trim().optional(),
+  email:     z.string().email().max(255).trim().toLowerCase().optional(),
+});
+
+router.patch('/me', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const parsed = updateMeSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: 'Donnees invalides', details: parsed.error.issues.map(e => e.message) });
+      return;
+    }
+    const { firstName, lastName, email } = parsed.data;
+    if (firstName === undefined && lastName === undefined && email === undefined) {
+      res.status(400).json({ error: 'Au moins un champ est requis (firstName, lastName, email)' });
+      return;
+    }
+
+    const userId = req.user!.userId;
+
+    // Si l'email change, verifier qu'il n'est pas deja pris par un autre compte
+    if (email !== undefined) {
+      const [existing] = await pool.execute(
+        'SELECT id FROM users WHERE email = ? AND id != ?',
+        [email, userId]
+      );
+      if ((existing as any[]).length > 0) {
+        res.status(409).json({ error: 'Cet email est deja utilise' });
+        return;
+      }
+    }
+
+    // Construire la liste des champs a mettre a jour
+    const fields: string[] = [];
+    const values: any[] = [];
+    if (firstName !== undefined) { fields.push('first_name = ?'); values.push(firstName); }
+    if (lastName  !== undefined) { fields.push('last_name = ?');  values.push(lastName); }
+    if (email     !== undefined) {
+      // Si l'email change, reinitialiser la verification
+      fields.push('email = ?', 'email_verified = 0');
+      values.push(email);
+    }
+    values.push(userId);
+
+    const [result]: any = await pool.execute(
+      `UPDATE users SET ${fields.join(', ')} WHERE id = ?`,
+      values
+    );
+    if (result.affectedRows === 0) {
+      res.status(404).json({ error: 'Utilisateur non trouve' });
+      return;
+    }
+
+    await logAudit('user.update_profile', {
+      userId,
+      details: { updatedFields: Object.keys(parsed.data) },
+      ip: getIp(req),
+    });
+
+    res.json({ message: 'Profil mis a jour' });
+  } catch (error) {
+    console.error('Update me error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

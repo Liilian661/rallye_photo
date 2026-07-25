@@ -8,9 +8,12 @@ import { validateBody } from '../middleware/validateInput';
 import { adminCreateUserSchema } from '../utils/validators';
 import { hashPassword } from '../utils/crypto';
 import { encrypt } from '../utils/encryption';
-import { testS3Connection, invalidateS3Cache } from '../utils/s3Service';
+import { testS3Connection, invalidateS3Cache, getSignedDownloadUrl, deleteFromS3, getS3Client, getS3Config } from '../utils/s3Service';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
 import { logAudit } from '../utils/auditLog';
 import { createImpersonateCode } from '../utils/impersonateCodes';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const archiver = require('archiver');
 
 const router = Router();
 
@@ -70,14 +73,17 @@ router.use(requireAdmin);
 // GET /admin/stats
 router.get('/stats', async (_req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const [usersCount] = await pool.execute('SELECT COUNT(*) as count FROM users');
-    const [eventsCount] = await pool.execute('SELECT COUNT(*) as count FROM events');
-    const [participantsCount] = await pool.execute('SELECT COUNT(*) as count FROM participants');
-    const [submissionsCount] = await pool.execute('SELECT COUNT(*) as count FROM submissions');
-    const [challengesCount] = await pool.execute('SELECT COUNT(*) as count FROM challenges');
-
-    const [activeEvents] = await pool.execute("SELECT COUNT(*) as count FROM events WHERE status = 'active'");
-    const [endedEvents] = await pool.execute("SELECT COUNT(*) as count FROM events WHERE status = 'ended'");
+    const [
+      [usersCount], [eventsCount], [participantsCount], [submissionsCount], [challengesCount], [activeEvents], [endedEvents]
+    ] = await Promise.all([
+      pool.execute('SELECT COUNT(*) as count FROM users'),
+      pool.execute('SELECT COUNT(*) as count FROM events'),
+      pool.execute('SELECT COUNT(*) as count FROM participants'),
+      pool.execute('SELECT COUNT(*) as count FROM submissions'),
+      pool.execute('SELECT COUNT(*) as count FROM challenges'),
+      pool.execute("SELECT COUNT(*) as count FROM events WHERE status = 'active'"),
+      pool.execute("SELECT COUNT(*) as count FROM events WHERE status = 'ended'"),
+    ]);
 
     const [planCounts] = await pool.execute(
       'SELECT plan, COUNT(*) as count FROM users GROUP BY plan ORDER BY count DESC'
@@ -118,25 +124,32 @@ router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const search = req.query.search as string || '';
     const plan = req.query.plan as string || '';
+    const page = Math.max(1, parseInt(req.query.page as string || '1', 10));
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string || '50', 10)));
+    const offset = (page - 1) * limit;
 
-    let query = `SELECT id, first_name, last_name, email, plan, is_admin, email_verified,
-                        newsletter, created_at, updated_at
-                 FROM users WHERE 1=1`;
+    let whereClause = 'WHERE 1=1';
     const params: any[] = [];
 
     if (search) {
       // audit: INFO-016 - echapper % _ \ et utiliser ESCAPE pour eviter les jokers injectes
-      query += " AND (first_name LIKE ? ESCAPE '\\\\' OR last_name LIKE ? ESCAPE '\\\\' OR email LIKE ? ESCAPE '\\\\')";
+      whereClause += " AND (first_name LIKE ? ESCAPE '\\\\' OR last_name LIKE ? ESCAPE '\\\\' OR email LIKE ? ESCAPE '\\\\')";
       const s = '%' + escapeLike(search) + '%';
       params.push(s, s, s);
     }
 
     if (plan) {
-      query += ' AND plan = ?';
+      whereClause += ' AND plan = ?';
       params.push(plan);
     }
 
-    query += ' ORDER BY created_at DESC';
+    const [countRows] = await pool.execute(`SELECT COUNT(*) as count FROM users ${whereClause}`, params);
+    const total = (countRows as any[])[0].count;
+
+    // audit: LOW-049 - interpoler directement les entiers DEJA valides pour LIMIT/OFFSET
+    const query = `SELECT id, first_name, last_name, email, plan, is_admin, email_verified,
+                          newsletter, created_at, updated_at
+                   FROM users ${whereClause} ORDER BY created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
     const [rows] = await pool.execute(query, params);
     const users = rows as any[];
@@ -153,7 +166,7 @@ router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
       eventCount: eventMap[u.id] || 0,
     }));
 
-    res.json(result);
+    res.json({ users: result, total, page, limit });
   } catch (error) {
     console.error('Admin users error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -285,10 +298,12 @@ router.delete('/users/:id', async (req: AuthRequest, res: Response): Promise<voi
     try {
       await conn.beginTransaction();
       // Delete in order: submissions, participants, challenges, events, refresh_tokens, user
-      for (const event of eventList) {
-        await conn.execute('DELETE FROM submissions WHERE event_id = ?', [event.id]);
-        await conn.execute('DELETE FROM participants WHERE event_id = ?', [event.id]);
-        await conn.execute('DELETE FROM challenges WHERE event_id = ?', [event.id]);
+      if (eventList.length > 0) {
+        const eventIds = eventList.map((e: any) => e.id);
+        const placeholders = eventIds.map(() => '?').join(',');
+        await conn.execute(`DELETE FROM submissions WHERE event_id IN (${placeholders})`, eventIds);
+        await conn.execute(`DELETE FROM participants WHERE event_id IN (${placeholders})`, eventIds);
+        await conn.execute(`DELETE FROM challenges WHERE event_id IN (${placeholders})`, eventIds);
       }
       await conn.execute('DELETE FROM events WHERE user_id = ?', [id]);
       await conn.execute('DELETE FROM refresh_tokens WHERE user_id = ?', [id]);
@@ -303,7 +318,6 @@ router.delete('/users/:id', async (req: AuthRequest, res: Response): Promise<voi
 
     // audit: MED-015 - nettoyage S3 best-effort apres commit (erreurs seulement loguees)
     if (s3Keys.length > 0) {
-      const { deleteFromS3 } = require('../utils/s3Service');
       Promise.all(s3Keys.map((key: string) =>
         deleteFromS3(key).catch((err: any) => console.error('S3 delete error for', key, err))
       )).catch(() => {});
@@ -333,26 +347,38 @@ router.get('/events', async (req: AuthRequest, res: Response): Promise<void> => 
       return;
     }
 
-    let query = `SELECT e.id, e.name, e.description, e.code, e.status, e.deadline, e.event_date,
-                        e.created_at, e.gallery_enabled, e.gallery_locked,
-                        u.first_name, u.last_name, u.email as organizer_email, u.plan as organizer_plan,
-                        (SELECT COUNT(*) FROM challenges WHERE event_id = e.id) as challenge_count,
-                        (SELECT COUNT(*) FROM participants WHERE event_id = e.id) as participant_count,
-                        (SELECT COUNT(*) FROM submissions WHERE event_id = e.id) as submission_count
-                 FROM events e
-                 JOIN users u ON e.user_id = u.id
-                 WHERE 1=1`;
+    const page = Math.max(1, parseInt(req.query.page as string || '1', 10));
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string || '50', 10)));
+    const offset = (page - 1) * limit;
+
+    let whereClause = 'WHERE 1=1';
     const params: any[] = [];
 
     if (status) {
-      query += ' AND e.status = ?';
+      whereClause += ' AND e.status = ?';
       params.push(status);
     }
 
-    query += ' ORDER BY e.created_at DESC';
+    const [countRows] = await pool.execute(
+      `SELECT COUNT(*) as count FROM events e JOIN users u ON e.user_id = u.id ${whereClause}`,
+      params
+    );
+    const total = (countRows as any[])[0].count;
+
+    // audit: LOW-049 - interpoler directement les entiers DEJA valides pour LIMIT/OFFSET
+    const query = `SELECT e.id, e.name, e.description, e.code, e.status, e.deadline, e.event_date,
+                          e.created_at, e.gallery_enabled, e.gallery_locked,
+                          u.first_name, u.last_name, u.email as organizer_email, u.plan as organizer_plan,
+                          (SELECT COUNT(*) FROM challenges WHERE event_id = e.id) as challenge_count,
+                          (SELECT COUNT(*) FROM participants WHERE event_id = e.id) as participant_count,
+                          (SELECT COUNT(*) FROM submissions WHERE event_id = e.id) as submission_count
+                   FROM events e
+                   JOIN users u ON e.user_id = u.id
+                   ${whereClause}
+                   ORDER BY e.created_at DESC LIMIT ${limit} OFFSET ${offset}`;
 
     const [rows] = await pool.execute(query, params);
-    res.json(rows);
+    res.json({ events: rows, total, page, limit });
   } catch (error) {
     console.error('Admin events error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
@@ -368,7 +394,7 @@ router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void>
       `SELECT e.id, e.name, e.description, e.code, e.status, e.deadline, e.event_date,
               e.created_at, e.updated_at, e.gallery_enabled, e.gallery_locked, e.gallery_locked_until,
               e.scoring_mode, e.team_mode, e.theme_color, e.tier, e.logo_key, e.banner_key,
-              e.user_id, e.referral_code,
+              e.user_id, u.referral_code,
               u.first_name, u.last_name, u.email as organizer_email
        FROM events e JOIN users u ON e.user_id = u.id WHERE e.id = ?`,
       [id]
@@ -380,17 +406,19 @@ router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void>
     }
 
     const [challenges] = await pool.execute(
-      'SELECT * FROM challenges WHERE event_id = ? ORDER BY sort_order',
+      'SELECT id, event_id, title, description, points, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? ORDER BY sort_order',
       [id]
     );
 
     const [participants] = await pool.execute(
-      'SELECT * FROM participants WHERE event_id = ? ORDER BY joined_at',
+      'SELECT id, event_id, name, team_id, joined_at FROM participants WHERE event_id = ? ORDER BY joined_at',
       [id]
     );
 
     const [submissions] = await pool.execute(
-      `SELECT s.*, p.name as participant_name, c.title as challenge_title
+      `SELECT s.id, s.event_id, s.challenge_id, s.participant_id, s.photo_url, s.photo_key,
+              s.is_winner, s.submitted_at, s.media_type,
+              p.name as participant_name, c.title as challenge_title
        FROM submissions s
        JOIN participants p ON s.participant_id = p.id
        JOIN challenges c ON s.challenge_id = c.id
@@ -400,17 +428,11 @@ router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void>
     );
 
     // Renouveler les URLs presignees
-    const { getSignedDownloadUrl } = require('../utils/s3Service');
     const subsArray = submissions as any[];
-    for (const sub of subsArray) {
-      if (sub.photo_key) {
-        try {
-          sub.photo_url = await getSignedDownloadUrl(sub.photo_key, 86400);
-        } catch {
-          // Garder l'ancienne URL
-        }
-      }
-    }
+    await Promise.all(subsArray.map((sub: any) => sub.photo_key
+      ? getSignedDownloadUrl(sub.photo_key, 86400).then((url: string) => { sub.photo_url = url; }).catch(() => {})
+      : Promise.resolve()
+    ));
 
     res.json({ event, challenges, participants, submissions: subsArray });
   } catch (error) {
@@ -459,7 +481,6 @@ router.delete('/events/:id', async (req: AuthRequest, res: Response): Promise<vo
 
     // audit: MED-015 - nettoyage S3 best-effort apres commit
     if (s3Keys.length > 0) {
-      const { deleteFromS3 } = require('../utils/s3Service');
       Promise.all(s3Keys.map((key: string) =>
         deleteFromS3(key).catch((err: any) => console.error('S3 delete error for', key, err))
       )).catch(() => {});
@@ -594,8 +615,6 @@ router.post('/settings/s3/test', async (_req: AuthRequest, res: Response): Promi
 router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const { id } = req.params;
-    const archiver = require('archiver');
-
     // Get event info
     const [eventRows] = await pool.execute('SELECT code, name FROM events WHERE id = ?', [id]);
     const event = (eventRows as any[])[0];
@@ -621,9 +640,6 @@ router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): 
       return;
     }
 
-    // Import S3 utils
-    const { getS3Client, getS3Config } = require('../utils/s3Service');
-    const { GetObjectCommand } = require('@aws-sdk/client-s3');
     const client = await getS3Client();
     const config = await getS3Config();
 
@@ -823,7 +839,6 @@ router.delete('/participants/:id', async (req: AuthRequest, res: Response): Prom
 
     // audit: MED-015 - nettoyage S3 best-effort apres commit
     if (s3Keys.length > 0) {
-      const { deleteFromS3 } = require('../utils/s3Service');
       Promise.all(s3Keys.map((key: string) =>
         deleteFromS3(key).catch((err: any) => console.error('S3 delete error for', key, err))
       )).catch(() => {});

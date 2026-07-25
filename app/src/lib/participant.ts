@@ -6,8 +6,6 @@ export interface ParticipantInfo {
   eventName: string;
   teamId?: string;
   teamName?: string;
-  // audit: CRIT-001 — token participant signe par l'API (Bearer pour submit/vote/delete)
-  participantToken?: string;
 }
 
 const STORAGE_KEY = (eventId: string) => `rp-participant-${eventId}`;
@@ -31,4 +29,18 @@ export function saveParticipant(info: ParticipantInfo): void {
 export function clearParticipant(eventId: string): void {
   if (typeof window === 'undefined') return;
   sessionStorage.removeItem(STORAGE_KEY(eventId));
+}
+
+// Fetches the participant token from the HttpOnly cookie via the server-side route.
+// The token is never stored in sessionStorage — only readable by the Next.js server.
+export async function getParticipantToken(eventId: string): Promise<string | null> {
+  if (typeof window === 'undefined') return null;
+  try {
+    const res = await fetch(`/api/participant/${eventId}/socket-token`);
+    if (!res.ok) return null;
+    const { token } = await res.json();
+    return typeof token === 'string' ? token : null;
+  } catch {
+    return null;
+  }
 }

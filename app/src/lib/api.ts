@@ -17,4 +17,11 @@ const api = axios.create({
   },
 });
 
+// Routes authenticated participant API calls through the Next.js proxy,
+// which reads the HttpOnly cookie server-side and adds the Authorization header.
+// Pass `?_eid=<eventId>` for paths that don't include the eventId in the URL.
+export const participantApi = axios.create({
+  baseURL: '/api/participant/forward/',
+});
+
 export default api;

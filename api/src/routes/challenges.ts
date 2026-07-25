@@ -3,6 +3,7 @@ import { v4 as uuidv4 } from 'uuid';
 import pool from '../config/database';
 import { requireAuth, AuthRequest } from '../middleware/auth';
 import { validateBody } from '../middleware/validateInput';
+import { z } from 'zod';
 import { createChallengeSchema } from '../utils/validators';
 import { emitToEvent } from '../config/socket';
 import { getEventLimit } from '../config/plans';
@@ -43,27 +44,39 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
     }
 
     const tier = (eventRows as any[])[0]?.tier || 'free';
-
-    const [challengeCount] = await pool.execute(
-      'SELECT COUNT(*) as count FROM challenges WHERE event_id = ?',
-      [eventId]
-    );
-    const count = (challengeCount as any[])[0].count;
     const limit = getEventLimit(tier, 'challenges');
 
-    if (count >= limit) {
-      res.status(403).json({
-        error: `Limite de ${limit} defis atteinte pour les evenements gratuits. Achetez un credit Event ou passez au Pro.`,
-      });
-      return;
-    }
-
+    // audit: race condition — COUNT + INSERT dans une transaction avec FOR UPDATE
+    // pour eviter deux insertions concurrentes qui depassent la limite.
     const id = uuidv4();
+    const conn = await pool.getConnection();
+    try {
+      await conn.beginTransaction();
+      const [challengeCount] = await conn.execute(
+        'SELECT COUNT(*) as count FROM challenges WHERE event_id = ? FOR UPDATE',
+        [eventId]
+      );
+      const count = (challengeCount as any[])[0].count;
 
-    await pool.execute(
-      'INSERT INTO challenges (id, event_id, title, description, points, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
-      [id, eventId, title, description || null, points, count]
-    );
+      if (count >= limit) {
+        await conn.rollback();
+        res.status(403).json({
+          error: `Limite de ${limit} defis atteinte pour les evenements gratuits. Achetez un credit Event ou passez au Pro.`,
+        });
+        return;
+      }
+
+      await conn.execute(
+        'INSERT INTO challenges (id, event_id, title, description, points, sort_order) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, eventId, title, description || null, points, count]
+      );
+      await conn.commit();
+    } catch (txError) {
+      await conn.rollback();
+      throw txError;
+    } finally {
+      conn.release();
+    }
 
     const challenge = { id, eventId, title, description, points, status: 'active' };
 
@@ -115,7 +128,6 @@ router.post('/challenges/:id/winner/:submissionId', requireAuth, async (req: Aut
     }
 
     emitToEvent(eventId, 'winner-selected', { challengeId: id, submissionId });
-    emitToEvent(eventId, 'leaderboard-updated', {});
 
     res.json({ message: 'Gagnant designe' });
   } catch (error) {
@@ -132,7 +144,7 @@ router.post('/challenges/:id/reveal', requireAuth, async (req: AuthRequest, res:
     const { id } = req.params;
 
     const [rows] = await pool.execute(
-      'SELECT c.event_id, s.id as submission_id, s.photo_url, p.name as winner_name, c.title, c.points FROM challenges c JOIN submissions s ON s.challenge_id = c.id AND s.is_winner = TRUE JOIN participants p ON p.id = s.participant_id JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
+      'SELECT c.event_id, s.id as submission_id, s.participant_id, s.photo_url, p.name as winner_name, c.title, c.points FROM challenges c JOIN submissions s ON s.challenge_id = c.id AND s.is_winner = TRUE JOIN participants p ON p.id = s.participant_id JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
       [id, req.user!.userId]
     );
     const results = rows as any[];
@@ -152,12 +164,59 @@ router.post('/challenges/:id/reveal', requireAuth, async (req: AuthRequest, res:
       points: result.points,
       winnerName: result.winner_name,
       photoUrl: result.photo_url,
+      participantId: result.participant_id,
     });
 
 
     res.json({ message: 'Gagnant revele' });
   } catch (error) {
     console.error('Reveal winner error:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// PATCH /challenges/:id
+const patchChallengeSchema = z.object({
+  title: z.string().min(1).max(200).optional(),
+  description: z.string().max(1000).nullable().optional(),
+  points: z.number().int().min(0).optional(),
+  sort_order: z.number().int().min(0).optional(),
+}).refine((data) => Object.keys(data).length > 0, { message: 'Au moins un champ requis' });
+
+router.patch('/challenges/:id', requireAuth, validateBody(patchChallengeSchema), async (req: AuthRequest, res: Response): Promise<void> => {
+  try {
+    const { id } = req.params;
+    const { title, description, points, sort_order } = req.body;
+
+    // Verifie que le challenge appartient a un event de l'utilisateur authentifie
+    const [rows] = await pool.execute(
+      'SELECT c.id FROM challenges c JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
+      [id, req.user!.userId]
+    );
+    if ((rows as any[]).length === 0) {
+      res.status(404).json({ error: 'Defi non trouve' });
+      return;
+    }
+
+    // Construit la clause SET dynamiquement pour ne mettre a jour que les champs fournis
+    const fields: string[] = [];
+    const values: any[] = [];
+    if (title !== undefined) { fields.push('title = ?'); values.push(title); }
+    if (description !== undefined) { fields.push('description = ?'); values.push(description); }
+    if (points !== undefined) { fields.push('points = ?'); values.push(points); }
+    if (sort_order !== undefined) { fields.push('sort_order = ?'); values.push(sort_order); }
+
+    if (fields.length === 0) {
+      res.status(400).json({ error: 'Au moins un champ requis' });
+      return;
+    }
+
+    values.push(id);
+    await pool.execute(`UPDATE challenges SET ${fields.join(', ')} WHERE id = ?`, values);
+
+    res.json({ message: 'Defi modifie' });
+  } catch (error) {
+    console.error('Patch challenge error:', error);
     res.status(500).json({ error: 'Erreur serveur' });
   }
 });

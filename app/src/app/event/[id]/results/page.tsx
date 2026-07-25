@@ -2,8 +2,8 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams } from 'next/navigation';
-import api from '@/lib/api';
-import { getParticipant } from '@/lib/participant';
+import api, { participantApi } from '@/lib/api';
+import { getParticipant, getParticipantToken } from '@/lib/participant';
 import { IconSparkles, IconParty, IconTrophy } from '@/lib/icons';
 import { io } from 'socket.io-client';
 
@@ -55,14 +55,12 @@ export default function ResultsPage() {
     }
   }, [eventId]);
 
-  const loadResults = useCallback(async () => {
+  const loadResults = useCallback(async (signal?: AbortSignal) => {
     setLoadError(false);
     try {
-      const p = getParticipant(eventId);
-      const authHeaders = p?.participantToken ? { Authorization: `Bearer ${p.participantToken}` } : {};
       const [challengesRes, submissionsRes] = await Promise.all([
-        api.get(`/events/${eventId}/challenges`),
-        api.get(`/events/${eventId}/submissions`, { headers: authHeaders }),
+        api.get(`/events/${eventId}/challenges`, { signal }),
+        participantApi.get(`events/${eventId}/submissions`, { signal }),
       ]);
 
       const challenges: Challenge[] = challengesRes.data;
@@ -102,48 +100,51 @@ export default function ResultsPage() {
   }, [loadResults]);
 
   useEffect(() => {
-    if (participantId) loadResults();
+    if (!participantId) return;
+    const controller = new AbortController();
+    loadResults(controller.signal);
+    return () => controller.abort();
   }, [participantId, loadResults]);
 
   // WebSocket for live reveal
   useEffect(() => {
-    // audit: MED-013 — envoyer le token participant au handshake socket si
-    // disponible (mode degrade cote serveur si absent). Le champ participantToken
-    // est pose par le flux de join (cf unite participant).
-    const participant = getParticipant(eventId) as ({ participantToken?: string } | null);
-    const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
-      transports: ['websocket', 'polling'],
-      auth: participant?.participantToken ? { token: participant.participantToken } : undefined,
-    });
+    let cancelled = false;
+    let socketInst: ReturnType<typeof io> | null = null;
 
-    socket.on('connect', () => {
-      socket.emit('join-event', eventId);
-    });
+    getParticipantToken(eventId).then((token) => {
+      if (cancelled) return;
+      const socket = io(process.env.NEXT_PUBLIC_API_URL || 'https://api.rallye-photo.com', {
+        transports: ['websocket', 'polling'],
+        auth: token ? { token } : undefined,
+      });
+      socketInst = socket;
 
-    socket.on('winner-revealed', (data: any) => {
-      const revealed: RevealedWinner = {
-        challengeTitle: data.challengeTitle || 'Défi',
-        // audit: INFO-018 — harmonisation du fallback : pas de winnerName affichable -> nom neutre
-        winnerName: data.winnerName || 'Gagnant',
-        points: data.points || 0,
-        // audit: LOW-067 — lire participantId via ref (connexion stable)
-        isMe: data.participantId === participantIdRef.current,
-      };
-      setNewReveal(revealed);
-      setTimeout(() => {
-        setNewReveal(null);
-        loadResultsRef.current();
-      }, 5000);
-    });
+      socket.on('connect', () => { socket.emit('join-event', eventId); });
 
-    socket.on('winner-selected', () => loadResultsRef.current());
+      socket.on('winner-revealed', (data: any) => {
+        const revealed: RevealedWinner = {
+          challengeTitle: data.challengeTitle || 'Défi',
+          winnerName: data.winnerName || 'Gagnant',
+          points: data.points || 0,
+          isMe: data.participantId === participantIdRef.current,
+        };
+        setNewReveal(revealed);
+        setTimeout(() => {
+          setNewReveal(null);
+          loadResultsRef.current();
+        }, 5000);
+      });
+
+      socket.on('winner-selected', () => loadResultsRef.current());
+    });
 
     return () => {
-      socket.emit('leave-event', eventId);
-      socket.disconnect();
+      cancelled = true;
+      if (socketInst) {
+        socketInst.emit('leave-event', eventId);
+        socketInst.disconnect();
+      }
     };
-    // audit: LOW-067 — dependances reduites a [eventId] : plus de
-    // reconnexion a chaque changement de participantId / loadResults.
   }, [eventId]);
 
   return (

@@ -27,7 +27,8 @@ export type AuditAction =
   | 'admin.delete_event'
   | 'admin.delete_participant'
   | 'admin.update_user'
-  | 'admin.create_user';
+  | 'admin.create_user'
+  | 'user.update_profile';
 
 export async function logAudit(
   action: AuditAction,

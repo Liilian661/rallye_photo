@@ -29,7 +29,22 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <meta name="theme-color" content="#e91e8c" />
         <link rel="apple-touch-icon" href="/icon-192.png" />
       </head>
-      <body>{children}</body>
+      <body>
+        {children}
+        <footer style={{
+          textAlign: 'center',
+          padding: '16px 24px',
+          fontSize: 12,
+          color: '#9ca3af',
+        }}>
+          <a
+            href="/confidentialite"
+            style={{ color: '#9ca3af', textDecoration: 'underline', textUnderlineOffset: 3 }}
+          >
+            Politique de confidentialité
+          </a>
+        </footer>
+      </body>
     </html>
   );
 }

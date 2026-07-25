@@ -119,7 +119,7 @@ router.get('/:eventId/gallery', rateLimiter(30, 60000), async (req, res: Respons
 });
 
 // GET /:eventId/gallery/status  (panel info, no photos)
-router.get('/:eventId/gallery/status', async (req, res: Response): Promise<void> => {
+router.get('/:eventId/gallery/status', rateLimiter(30, 60000), async (req, res: Response): Promise<void> => {
   try {
     const eventId = req.params.eventId as string;
 

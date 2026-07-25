@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import api from '@/lib/api';
 import { getParticipant, saveParticipant } from '@/lib/participant';
+import axios from 'axios';
 import { IconSad, IconAlarm, IconArrowLeft } from '@/lib/icons';
 
 interface EventInfo {
@@ -38,8 +39,11 @@ export default function JoinPage() {
   const [eventError, setEventError] = useState('');
 
   useEffect(() => {
-    api.get(`/events/join/${code}`)
-      .then(async ({ data }) => {
+    const controller = new AbortController();
+
+    const load = async () => {
+      try {
+        const { data } = await api.get(`/events/join/${code}`, { signal: controller.signal });
         setEvent(data);
         // Check if already joined
         const existing = getParticipant(data.id);
@@ -50,15 +54,20 @@ export default function JoinPage() {
         // Load teams if team mode
         if (data.team_mode) {
           try {
-            const teamsRes = await api.get(`/events/${data.id}/teams`);
+            const teamsRes = await api.get(`/events/${data.id}/teams`, { signal: controller.signal });
             setTeams(teamsRes.data);
           } catch { /* ignore */ }
         }
-      })
-      .catch((err) => {
+      } catch (err: any) {
+        if (err.name === 'AbortError' || err.name === 'CanceledError') return;
         setEventError(err.response?.data?.error || 'Evenement non trouve');
-      })
-      .finally(() => setLoading(false));
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    load();
+    return () => controller.abort();
   }, [code, router]);
 
   const handleJoin = async (e: React.FormEvent) => {
@@ -86,7 +95,9 @@ export default function JoinPage() {
         localStorage.setItem('rp-device-id', deviceId);
       }
 
-      const { data } = await api.post(`/events/${event.id}/join`, {
+      // Join via Next.js proxy — token stored as HttpOnly cookie, not in sessionStorage
+      const { data } = await axios.post('/api/participant/join', {
+        eventId: event.id,
         name: name.trim(),
         deviceId,
         teamId: selectedTeam || undefined,
@@ -102,9 +113,6 @@ export default function JoinPage() {
         eventName: event.name,
         teamId: data.teamId || undefined,
         teamName: selectedTeamObj?.name || undefined,
-        // audit: CRIT-001 — persister le token signe renvoye par l'API
-        // (sans lui, tout submit/vote/delete renverrait 401 pour ce participant).
-        participantToken: data.participantToken,
       });
       router.push(`/event/${event.id}`);
     } catch (err: any) {
