@@ -75,19 +75,19 @@ done
 # 3. Install deps + Builds (un echec avorte tout grace a set -e, AVANT le restart).
 # ------------------------------------------------------------------
 echo "Install deps API..."
-cd "$DEPLOY_ROOT/api" && npm ci && cd "$DEPLOY_ROOT"
+cd "$DEPLOY_ROOT/api" && NODE_ENV=development npm ci && cd "$DEPLOY_ROOT"
 echo "Build API..."
 cd "$DEPLOY_ROOT/api" && npm run build && cd "$DEPLOY_ROOT"
 echo "Install deps Panel..."
-cd "$DEPLOY_ROOT/panel" && npm ci && cd "$DEPLOY_ROOT"
+cd "$DEPLOY_ROOT/panel" && NODE_ENV=development npm ci && cd "$DEPLOY_ROOT"
 echo "Build Panel..."
 cd "$DEPLOY_ROOT/panel" && npm run build && cd "$DEPLOY_ROOT"
 echo "Install deps App..."
-cd "$DEPLOY_ROOT/app" && npm ci && cd "$DEPLOY_ROOT"
+cd "$DEPLOY_ROOT/app" && NODE_ENV=development npm ci && cd "$DEPLOY_ROOT"
 echo "Build App..."
 cd "$DEPLOY_ROOT/app" && npm run build && cd "$DEPLOY_ROOT"
 echo "Install deps Admin..."
-cd "$DEPLOY_ROOT/admin" && npm ci && cd "$DEPLOY_ROOT"
+cd "$DEPLOY_ROOT/admin" && NODE_ENV=development npm ci && cd "$DEPLOY_ROOT"
 echo "Build Admin..."
 cd "$DEPLOY_ROOT/admin" && npm run build && cd "$DEPLOY_ROOT"
 
