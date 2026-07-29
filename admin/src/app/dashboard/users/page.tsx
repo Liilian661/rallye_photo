@@ -98,7 +98,7 @@ export default function AdminUsersPage() {
       if (search) params.search = search;
       if (filterPlan) params.plan = filterPlan;
       const { data } = await api.get('/admin/users', { params });
-      setUsers(data);
+      setUsers(Array.isArray(data) ? data : (data.users ?? []));
     } catch (err) {
       console.error(err);
     } finally {

@@ -36,7 +36,7 @@ export default function AdminEventsPage() {
       const params: Record<string, string> = {};
       if (filterStatus) params.status = filterStatus;
       const { data } = await api.get('/admin/events', { params });
-      setEvents(data);
+      setEvents(Array.isArray(data) ? data : (data.events ?? []));
     } catch (err) {
       console.error(err);
       setLoadError(true); // audit: INFO-031
