@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { Logo } from '@/components/Logo';
 
 export default function HomePage() {
   const [code, setCode] = useState('');
@@ -33,16 +34,8 @@ export default function HomePage() {
     }}>
       <div style={{ width: '100%', textAlign: 'center' }} className="fade-in">
         <div style={{ marginBottom: 48 }}>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 36,
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            marginBottom: 8,
-          }}>
-            rallye<span style={{ color: 'var(--rp-pink)' }}>.</span>photo
-          </h1>
-          <p style={{ color: 'var(--rp-text-muted)', fontSize: 16 }}>
+          <Logo size={36} />
+          <p style={{ color: 'var(--rp-text-muted)', fontSize: 16, marginTop: 10 }}>
             Rejoignez le rallye photo !
           </p>
         </div>

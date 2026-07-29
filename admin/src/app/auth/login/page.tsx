@@ -1,5 +1,7 @@
 'use client';
 
+import { Logo } from '@/lib/Logo';
+
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
@@ -52,16 +54,8 @@ export default function AdminLoginPage() {
     }}>
       <div style={{ width: '100%', maxWidth: 400 }} className="fade-in">
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 26,
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            marginBottom: 4,
-          }}>
-            rallye<span style={{ color: 'var(--rp-accent)' }}>.</span>photo
-          </h1>
-          <p style={{ color: 'var(--rp-text-muted)', fontSize: 13 }}>Administration</p>
+          <Logo size={26} />
+          <p style={{ color: 'var(--rp-text-muted)', fontSize: 13, marginTop: 6 }}>Administration</p>
         </div>
 
         <div className="card" style={{ padding: '1.5rem' }}>

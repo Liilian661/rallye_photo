@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useAuth } from '@/lib/auth';
+import { Logo } from '../components/Logo';
 
 export default function LoginPage() {
   const [email, setEmail] = useState('');
@@ -41,17 +42,8 @@ export default function LoginPage() {
     }}>
       <div style={{ width: '100%', maxWidth: 420 }} className="fade-in">
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 28,
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            marginBottom: 8,
-            color: 'var(--rp-logo-text)',
-          }}>
-            rallye<span style={{ color: 'var(--rp-logo-dot)' }}>.</span>photo
-          </h1>
-          <p style={{ color: 'var(--rp-text-muted)', fontSize: 15 }}>
+          <Logo size={28} />
+          <p style={{ color: 'var(--rp-text-muted)', fontSize: 15, marginTop: 8 }}>
             Connectez-vous à votre espace organisateur
           </p>
         </div>

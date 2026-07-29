@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="44" viewBox="0 0 220 44" role="img" aria-label="rallye.photo">
+  <!-- aperture icon (camera shutter) -->
+  <g transform="translate(6, 6)">
+    <circle cx="16" cy="16" r="13.5" stroke="#B8FF4A" stroke-width="2.5" fill="none"/>
+    <circle cx="16" cy="16" r="5" fill="#B8FF4A"/>
+    <line x1="16" y1="11" x2="16" y2="3.75" stroke="#B8FF4A" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <line x1="20.33" y1="13.5" x2="26.61" y2="9.88" stroke="#B8FF4A" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <line x1="20.33" y1="18.5" x2="26.61" y2="22.13" stroke="#B8FF4A" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <line x1="16" y1="21" x2="16" y2="28.25" stroke="#B8FF4A" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <line x1="11.67" y1="18.5" x2="5.39" y2="22.13" stroke="#B8FF4A" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+    <line x1="11.67" y1="13.5" x2="5.39" y2="9.88" stroke="#B8FF4A" stroke-width="1.5" stroke-linecap="round" opacity="0.6"/>
+  </g>
+  <!-- wordmark -->
+  <text x="48" y="30" font-family="system-ui,-apple-system,'Segoe UI',Arial,sans-serif" font-size="24" font-weight="700" letter-spacing="-0.5">
+    <tspan fill="#FFFFFF">rallye</tspan><tspan fill="#B8FF4A">.</tspan><tspan fill="#FFFFFF">photo</tspan>
+  </text>
+</svg>

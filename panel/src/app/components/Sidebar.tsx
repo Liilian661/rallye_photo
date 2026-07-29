@@ -6,6 +6,7 @@ import { usePathname } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
 import { IconHome, IconCalendar, IconStar, IconSettings, IconMenu, IconX, IconMoon, IconSun, IconLogout, IconUsers } from '@/lib/icons';
+import { Logo } from './Logo';
 
 const navItems = [
   { href: '/dashboard',             label: 'Dashboard',    icon: IconHome },
@@ -107,18 +108,7 @@ export default function Sidebar() {
 
         {/* Logo */}
         <div style={{ paddingLeft: 12, flexShrink: 0, marginBottom: '1.5rem' }}>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 20,
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            color: 'var(--rp-logo-text)',
-          }}>
-            rallye<span style={{ color: 'var(--rp-logo-dot)' }}>.</span>photo
-          </h1>
-          <p style={{ fontSize: 11, color: 'var(--rp-text-muted)', marginTop: 2 }}>
-            Panel organisateur
-          </p>
+          <Logo size={20} subtitle="Panel organisateur" />
         </div>
 
         {/* Nav */}

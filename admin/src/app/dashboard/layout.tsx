@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import Cookies from 'js-cookie';
 import api from '@/lib/api';
 import { IconHome, IconUsers, IconCalendar, IconSettings, IconMenu, IconX, IconLogout } from '@/lib/icons';
+import { Logo } from '@/lib/Logo';
 
 const navItems = [
   { href: '/dashboard', label: 'Dashboard', icon: IconHome },
@@ -115,12 +116,7 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
         </button>
 
         <div style={{ paddingLeft: 10, marginBottom: '1.5rem' }}>
-          <h1 style={{ fontFamily: 'var(--font-display)', fontSize: 18, fontWeight: 700, color: '#fff' }}>
-            rallye<span style={{ color: 'var(--rp-accent)' }}>.</span>photo
-          </h1>
-          <p style={{ fontSize: 10, color: 'var(--rp-danger-text)', fontWeight: 600, marginTop: 2 }}>
-            ADMIN
-          </p>
+          <Logo size={18} subtitle="ADMIN" subtitleStyle={{ color: 'var(--rp-danger-text)', fontWeight: 600 }} />
         </div>
 
         <nav style={{ flex: 1 }}>

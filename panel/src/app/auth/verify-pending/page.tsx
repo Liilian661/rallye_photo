@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useAuth } from '@/lib/auth';
 import api from '@/lib/api';
 import { IconMail } from '@/lib/icons';
+import { Logo } from '../components/Logo';
 
 export default function VerifyPendingPage() {
   const { user, refreshUser, logout } = useAuth();
@@ -58,15 +59,7 @@ export default function VerifyPendingPage() {
     }}>
       <div style={{ width: '100%', maxWidth: 420 }} className="fade-in">
         <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-          <h1 style={{
-            fontFamily: 'var(--font-display)',
-            fontSize: 28,
-            fontWeight: 700,
-            letterSpacing: '-0.02em',
-            color: 'var(--rp-logo-text)',
-          }}>
-            rallye<span style={{ color: 'var(--rp-logo-dot)' }}>.</span>photo
-          </h1>
+          <Logo size={28} />
         </div>
 
         <div className="card" style={{ padding: '2rem', textAlign: 'center' }}>
