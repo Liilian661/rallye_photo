@@ -106,7 +106,7 @@ function ResetContent() {
             }}>
               Vous pouvez maintenant vous connecter avec votre nouveau mot de passe.
             </p>
-            <button className="btn-gradient" onClick={() => router.push('/auth/login')}>
+            <button className="btn-gradient" onClick={() => router.replace('/auth/login')}>
               Se connecter
             </button>
           </div>

@@ -134,13 +134,14 @@ router.post('/events/:eventId/join', rateLimiter(10, 60000), validateBody(joinEv
 // organisateur dispose de ses propres endpoints (events/admin) pour cette donnee.
 router.get('/events/:eventId/participants', requireParticipant, async (req: ParticipantRequest, res: Response): Promise<void> => {
   try {
-    if (req.participant!.eventId !== req.params.eventId) {
+    const eventId = req.params.eventId as string;
+    if (req.participant!.eventId !== eventId) {
       res.status(403).json({ error: 'Acces refuse' });
       return;
     }
     const [rows] = await pool.execute(
       'SELECT p.id, p.name, p.team_id, p.joined_at, t.name as team_name, t.color as team_color FROM participants p LEFT JOIN teams t ON t.id = p.team_id WHERE p.event_id = ? ORDER BY p.joined_at ASC',
-      [req.params.eventId]
+      [eventId]
     );
     res.json(rows);
   } catch (error) {
@@ -164,20 +165,36 @@ router.delete('/events/:eventId/participants/:participantId', requireAuth, async
       return;
     }
 
-    // Collect S3 keys for participant's submissions
-    const [subRows] = await pool.execute(
-      'SELECT photo_key FROM submissions WHERE event_id = ? AND participant_id = ? AND photo_key IS NOT NULL',
-      [eventId, participantId]
-    );
-    const s3Keys: string[] = (subRows as any[]).map((s: any) => s.photo_key);
+    // Collect S3 keys and delete submissions + participant atomically
+    const conn = await pool.getConnection();
+    let s3Keys: string[] = [];
+    let affectedRows = 0;
+    try {
+      await conn.beginTransaction();
+      const [subRows] = await conn.execute(
+        'SELECT photo_key FROM submissions WHERE event_id = ? AND participant_id = ? AND photo_key IS NOT NULL',
+        [eventId, participantId]
+      );
+      s3Keys = (subRows as any[]).map((s: any) => s.photo_key);
+      await conn.execute('DELETE FROM submissions WHERE event_id = ? AND participant_id = ?', [eventId, participantId]);
+      const [deleteResult] = await conn.execute(
+        'DELETE FROM participants WHERE id = ? AND event_id = ?',
+        [participantId, eventId]
+      );
+      affectedRows = (deleteResult as any).affectedRows;
+      if (affectedRows === 0) {
+        await conn.rollback();
+      } else {
+        await conn.commit();
+      }
+    } catch (e) {
+      await conn.rollback();
+      throw e;
+    } finally {
+      conn.release();
+    }
 
-    // Delete participant's submissions then the participant
-    await pool.execute('DELETE FROM submissions WHERE event_id = ? AND participant_id = ?', [eventId, participantId]);
-    const [deleteResult] = await pool.execute(
-      'DELETE FROM participants WHERE id = ? AND event_id = ?',
-      [participantId, eventId]
-    );
-    if ((deleteResult as any).affectedRows === 0) {
+    if (affectedRows === 0) {
       res.status(404).json({ error: 'Participant non trouve' });
       return;
     }

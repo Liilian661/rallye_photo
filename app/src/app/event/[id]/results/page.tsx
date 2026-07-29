@@ -46,6 +46,8 @@ export default function ResultsPage() {
   // a chaque changement de participantId (qui passe de '' a sa vraie valeur).
   const participantIdRef = useRef('');
   const loadResultsRef = useRef<() => void>(() => {});
+  // Ref pour le timeout du reveal afin de le nettoyer au démontage
+  const revealTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     const p = getParticipant(eventId);
@@ -84,7 +86,8 @@ export default function ResultsPage() {
         .filter(w => w.winnerName !== '???');
 
       setWinners(revealedWinners);
-    } catch (err) {
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'CanceledError') return;
       console.error(err);
       setLoadError(true);
     } finally {
@@ -129,7 +132,8 @@ export default function ResultsPage() {
           isMe: data.participantId === participantIdRef.current,
         };
         setNewReveal(revealed);
-        setTimeout(() => {
+        if (revealTimeoutRef.current) clearTimeout(revealTimeoutRef.current);
+        revealTimeoutRef.current = setTimeout(() => {
           setNewReveal(null);
           loadResultsRef.current();
         }, 5000);
@@ -140,6 +144,7 @@ export default function ResultsPage() {
 
     return () => {
       cancelled = true;
+      if (revealTimeoutRef.current) clearTimeout(revealTimeoutRef.current);
       if (socketInst) {
         socketInst.emit('leave-event', eventId);
         socketInst.disconnect();

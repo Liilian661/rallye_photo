@@ -12,6 +12,7 @@ const csp = [
   "media-src 'self' blob: data: https:",
   `connect-src 'self' ${apiUrl}`,
   "worker-src 'self'",
+  "manifest-src 'self'",
   "frame-ancestors 'none'",
   "base-uri 'self'",
   "form-action 'self'",

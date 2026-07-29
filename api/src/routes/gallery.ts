@@ -62,7 +62,7 @@ router.get('/:eventId/gallery', rateLimiter(30, 60000), async (req, res: Respons
       expiresAt = new Date(startDate.getTime() + galleryDays * 24 * 60 * 60 * 1000);
 
       await pool.execute(
-        'INSERT INTO gallery_access (id, event_id, expires_at, permanent, paid) VALUES (UUID(), ?, ?, FALSE, FALSE)',
+        'INSERT IGNORE INTO gallery_access (id, event_id, expires_at, permanent, paid) VALUES (UUID(), ?, ?, FALSE, FALSE)',
         [eventId, expiresAt.toISOString().slice(0, 19).replace('T', ' ')]
       );
     } else {

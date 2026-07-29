@@ -39,18 +39,23 @@ export default function AffiliatesPage() {
   const [codeError, setCodeError] = useState('');
   const [codeSaving, setCodeSaving] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (signal?: AbortSignal) => {
     try {
-      const { data: d } = await api.get('/affiliates/me');
+      const { data: d } = await api.get('/affiliates/me', { signal });
       setData(d);
-    } catch (err) {
+    } catch (err: any) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       console.error(err);
     } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { loadData(); }, [loadData]);
+  useEffect(() => {
+    const ctrl = new AbortController();
+    loadData(ctrl.signal);
+    return () => ctrl.abort();
+  }, [loadData]);
 
   const copyLink = () => {
     if (!data) return;

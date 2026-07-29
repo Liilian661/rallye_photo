@@ -118,6 +118,9 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
     // audit: LOW-061 — demarrage en mode photo : pas d'audio
     startCamera(facingMode, false);
     return () => {
+      if (recorderRef.current && recorderRef.current.state === 'recording') {
+        recorderRef.current.stop();
+      }
       if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
       if (timerRef.current) clearInterval(timerRef.current);
     };
@@ -259,6 +262,9 @@ export default function CameraModal({ onCapture, onClose, enableVideo = true }: 
   };
 
   const cleanup = () => {
+    if (recorderRef.current && recorderRef.current.state === 'recording') {
+      recorderRef.current.stop();
+    }
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
     if (preview) URL.revokeObjectURL(preview);
     if (timerRef.current) clearInterval(timerRef.current);

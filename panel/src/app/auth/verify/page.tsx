@@ -77,7 +77,7 @@ function VerifyContent() {
             <p style={{ color: 'var(--rp-text-muted)', fontSize: 15, marginBottom: 24 }}>
               {message}
             </p>
-            <button className="btn-gradient" onClick={() => router.push('/dashboard')}>
+            <button className="btn-gradient" onClick={() => router.replace('/dashboard')}>
               Acceder au dashboard
             </button>
           </>
@@ -98,7 +98,7 @@ function VerifyContent() {
             <p style={{ color: 'var(--rp-text-muted)', fontSize: 15, marginBottom: 24 }}>
               {message}
             </p>
-            <button className="btn-gradient" onClick={() => router.push('/auth/login')}>
+            <button className="btn-gradient" onClick={() => router.replace('/auth/login')}>
               Retour au login
             </button>
           </>

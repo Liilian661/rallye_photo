@@ -1,4 +1,5 @@
 import { Router, Response, Request } from 'express';
+import jwt from 'jsonwebtoken';
 import pool from '../config/database';
 import { verifyPhotoToken } from '../utils/photoToken';
 import { getS3Client, getS3Config } from '../utils/s3Service';
@@ -49,7 +50,6 @@ router.get('/:token', rateLimiter(120, 60000), async (req: Request, res: Respons
     const token = req.params.token as string;
 
     // Decode le token pour recuperer l'eventId (sans verifier encore)
-    const jwt = require('jsonwebtoken');
     const decoded = jwt.decode(token) as any;
     if (!decoded || !decoded.e) {
       res.status(403).json({ error: 'Token invalide' });
@@ -97,7 +97,7 @@ router.get('/:token', rateLimiter(120, 60000), async (req: Request, res: Respons
     res.set({
       'Content-Type': s3Response.ContentType || 'image/webp',
       'Cache-Control': 'private, max-age=3600',
-      'Content-Length': s3Response.ContentLength?.toString(),
+      ...(s3Response.ContentLength !== undefined && { 'Content-Length': s3Response.ContentLength.toString() }),
       'Cross-Origin-Resource-Policy': 'cross-origin',
     });
 

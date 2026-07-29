@@ -8,7 +8,9 @@ export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    const token = Cookies.get('adminAccessToken');
+    // adminAccessToken est HttpOnly (posé par l'API) — non lisible en JS.
+    // On utilise adminUser (cookie JS posé après login réussi) comme le layout.
+    const token = Cookies.get('adminUser');
     if (token) {
       router.replace('/dashboard');
     } else {

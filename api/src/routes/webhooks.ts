@@ -132,10 +132,10 @@ async function handleCheckoutCompleted(session: any, stripeEventId: string) {
       const quantity = Math.max(1, Math.min(10, Number.isFinite(parsed) ? parsed : 1));
       const expectedTotal = quantity * CREDIT_PRICE_CENTS;
       if (typeof session.amount_total !== 'number') {
-        console.error('[Webhook] amount_total absent sur session', session.id);
-        // Rollback sans erreur vers Stripe (idempotence) : on laisse Stripe relivrer
-        // si le champ finit par arriver, sans crediter a l'aveugle.
-        await conn.rollback();
+        console.error('[Webhook] amount_total absent sur session', session.id, '— event marque traite, credit non accorde, revue manuelle requise');
+        // L'event est marque traite (commit) pour eviter les re-livraisons indefinies.
+        // Ne pas crediter a l'aveugle.
+        await conn.commit();
         return;
       }
       if (session.amount_total !== expectedTotal) {

@@ -319,7 +319,7 @@ router.get('/events/:eventId/submissions', requireAuthOrParticipant, async (req:
 // GET /challenges/:challengeId/submissions — organisateur uniquement
 router.get('/challenges/:challengeId/submissions', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const challengeId = req.params.challengeId;
+    const challengeId = req.params.challengeId as string;
     const [challengeRows] = await pool.execute('SELECT event_id FROM challenges WHERE id = ?', [challengeId]);
     const eventId = (challengeRows as any[])[0]?.event_id;
 
@@ -352,6 +352,7 @@ router.get('/challenges/:challengeId/submissions', requireAuth, async (req: Auth
         const token = await signPhotoToken(sub.photo_key, eventId, eventSecret, 86400);
         sub.photo_url = apiBase + '/photos/' + token;
       }
+      delete sub.photo_key;
     }));
 
     res.json(submissions);
@@ -364,9 +365,10 @@ router.get('/challenges/:challengeId/submissions', requireAuth, async (req: Auth
 // DELETE /submissions/:id
 router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const id = req.params.id as string;
     const [rows] = await pool.execute(
       'SELECT s.id, s.photo_key, s.event_id, s.challenge_id FROM submissions s JOIN events e ON e.id = s.event_id WHERE s.id = ? AND e.user_id = ?',
-      [req.params.id, req.user!.userId]
+      [id, req.user!.userId]
     );
     if ((rows as any[]).length === 0) {
       res.status(404).json({ error: 'Soumission non trouvee' });
@@ -374,11 +376,13 @@ router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Res
     }
     const submission = (rows as any[])[0];
     // S3 d'abord (best-effort), puis DELETE en DB pour eviter les orphelins S3 si le DELETE echoue
-    try { await deleteFromS3(submission.photo_key); } catch (error) {
-      console.error('S3 delete error (continuing):', error);
+    if (submission.photo_key) {
+      try { await deleteFromS3(submission.photo_key); } catch (error) {
+        console.error('S3 delete error (continuing):', error);
+      }
     }
-    await pool.execute('DELETE FROM submissions WHERE id = ?', [req.params.id]);
-    emitToEvent(submission.event_id, 'submission-deleted', { submissionId: req.params.id, challengeId: submission.challenge_id, eventId: submission.event_id });
+    await pool.execute('DELETE FROM submissions WHERE id = ?', [id]);
+    emitToEvent(submission.event_id as string, 'submission-deleted', { submissionId: id, challengeId: submission.challenge_id, eventId: submission.event_id });
     res.json({ message: 'Supprime' });
   } catch (error) {
     console.error('Delete submission error:', error);
@@ -391,7 +395,7 @@ router.delete('/submissions/:id', requireAuth, async (req: AuthRequest, res: Res
 // est derive du token participant signe et l'appartenance est verifiee.
 router.delete('/submissions/:id/participant', requireParticipant, async (req: ParticipantRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const participantId = req.participant!.participantId;
     const [rows] = await pool.execute(
       'SELECT s.id, s.photo_key, s.event_id, s.challenge_id FROM submissions s WHERE s.id = ? AND s.participant_id = ?',
@@ -413,11 +417,13 @@ router.delete('/submissions/:id/participant', requireParticipant, async (req: Pa
       return;
     }
     // S3 d'abord (best-effort), puis DELETE en DB pour eviter les orphelins S3 si le DELETE echoue
-    try { await deleteFromS3(submission.photo_key); } catch (error) {
-      console.error('S3 delete error (continuing):', error);
+    if (submission.photo_key) {
+      try { await deleteFromS3(submission.photo_key); } catch (error) {
+        console.error('S3 delete error (continuing):', error);
+      }
     }
     await pool.execute('DELETE FROM submissions WHERE id = ?', [id]);
-    emitToEvent(submission.event_id, 'submission-deleted', { submissionId: id, challengeId: submission.challenge_id, eventId: submission.event_id });
+    emitToEvent(submission.event_id as string, 'submission-deleted', { submissionId: id, challengeId: submission.challenge_id, eventId: submission.event_id });
     res.json({ message: 'Supprime' });
   } catch (error) {
     console.error('Participant delete submission error:', error);

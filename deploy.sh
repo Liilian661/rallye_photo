@@ -92,7 +92,7 @@ echo "Build Admin..."
 cd "$DEPLOY_ROOT/admin" && npm run build && cd "$DEPLOY_ROOT"
 
 # ------------------------------------------------------------------
-# 3. Restart PM2 + health-check avec garde-fou rollback.
+# 4. Restart PM2 + health-check avec garde-fou rollback.
 # ------------------------------------------------------------------
 echo "Restart services..."
 pm2 startOrReload "$DEPLOY_ROOT/ecosystem.config.js" --update-env

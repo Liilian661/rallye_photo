@@ -64,11 +64,20 @@ export function requireAuthOrParticipant(
     return;
   }
 
+  // Vérification JWT organisateur dans un try/catch SÉPARÉ de l'appel next(),
+  // pour ne pas avaler les erreurs lancées par les middlewares suivants.
+  let userVerified = false;
   try {
     req.user = verifyAccessToken(token);
+    userVerified = true;
+  } catch {
+    // Erreur JWT uniquement — on tente l'auth participant ci-dessous.
+  }
+
+  if (userVerified) {
     next();
     return;
-  } catch {}
+  }
 
   const participant = verifyParticipantToken(token);
   if (participant) {

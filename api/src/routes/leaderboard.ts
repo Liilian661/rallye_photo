@@ -36,6 +36,8 @@ router.get('/events/:eventId/leaderboard', requireAuthOrParticipant, async (req:
       // audit: LOW-044 - COUNT(DISTINCT challenge) pour eviter le sur-comptage
       // si plusieurs soumissions existent pour un meme (participant, challenge).
       // En mode participation, 'wins' = nombre de defis releves (semantique assumee).
+      // La deduplication se fait au niveau du JOIN (DISTINCT participant_id, challenge_id)
+      // pour que SUM(c.points) ne compte chaque defi qu'une seule fois par participant.
       query = `SELECT
         p.id,
         p.name,
@@ -46,7 +48,7 @@ router.get('/events/:eventId/leaderboard', requireAuthOrParticipant, async (req:
         COUNT(DISTINCT s.challenge_id) as total_submissions,
         COUNT(DISTINCT s.challenge_id) as wins
        FROM participants p
-       LEFT JOIN submissions s ON s.participant_id = p.id AND s.event_id = ?
+       LEFT JOIN (SELECT DISTINCT participant_id, challenge_id, event_id FROM submissions) s ON s.participant_id = p.id AND s.event_id = ?
        LEFT JOIN challenges c ON c.id = s.challenge_id
        LEFT JOIN teams t ON t.id = p.team_id
        WHERE p.event_id = ?

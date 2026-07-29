@@ -51,6 +51,19 @@ function pruneExpired(now: number): void {
 }
 
 // --- Logique Redis ---
+// Script Lua atomique : INCR + EXPIRE en une seule transaction Redis.
+// Garantit que le TTL est toujours positionne, meme si le process crash
+// entre INCR et EXPIRE (race condition de la version naive INCR/EXPIRE).
+// On verifie aussi TTL < 0 (cle sans expiration) pour rattraper un
+// eventuel echec anterieur de EXPIRE.
+const RATE_LIMIT_LUA = `
+local c = redis.call('INCR', KEYS[1])
+if redis.call('TTL', KEYS[1]) < 0 then
+  redis.call('EXPIRE', KEYS[1], ARGV[1])
+end
+return c
+`;
+
 async function checkRateRedis(
   key: string,
   maxRequests: number,
@@ -58,11 +71,7 @@ async function checkRateRedis(
 ): Promise<boolean> {
   // Retourne true si la requete est autorisee, false si elle depasse la limite.
   // Leve une exception si Redis est down (l'appelant capturera et basculera sur la Map).
-  const count = await redis!.incr(key);
-  if (count === 1) {
-    // Premiere requete dans cette fenetre : poser le TTL
-    await redis!.expire(key, windowSecs);
-  }
+  const count = await redis!.eval(RATE_LIMIT_LUA, 1, key, String(windowSecs)) as number;
   return count <= maxRequests;
 }
 

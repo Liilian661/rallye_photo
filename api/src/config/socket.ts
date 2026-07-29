@@ -106,6 +106,9 @@ export function initSocketServer(httpServer: HttpServer): SocketServer {
 
     socket.on('leave-event', (eventId: string) => {
       try {
+        if (typeof eventId !== 'string' || eventId.length === 0 || eventId.length > 64) {
+          return;
+        }
         socket.leave('event:' + eventId);
         joinedEvents.delete(eventId);
         emitOnlineCount(eventId).catch(console.error);

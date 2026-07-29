@@ -86,21 +86,29 @@ interface User {
 
 export default function AdminUsersPage() {
   const [users, setUsers] = useState<User[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [search, setSearch] = useState('');
   const [filterPlan, setFilterPlan] = useState('');
   const [showCreate, setShowCreate] = useState(false);
 
   const loadUsers = useCallback(async () => {
+    setLoadError(false);
+    setLoading(true);
     try {
       // audit: INFO-034 — params type au lieu de `any`.
       const params: Record<string, string> = {};
       if (search) params.search = search;
       if (filterPlan) params.plan = filterPlan;
       const { data } = await api.get('/admin/users', { params });
-      setUsers(Array.isArray(data) ? data : (data.users ?? []));
+      const list: User[] = Array.isArray(data) ? data : (data.users ?? []);
+      setUsers(list);
+      // Utiliser le total paginé si disponible, sinon longueur locale.
+      setTotal(typeof data.total === 'number' ? data.total : list.length);
     } catch (err) {
       console.error(err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -162,7 +170,7 @@ export default function AdminUsersPage() {
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
         <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700 }}>
-          Utilisateurs ({users.length})
+          Utilisateurs ({total})
         </h2>
         <button className="btn-primary" onClick={() => setShowCreate(true)} style={{ fontSize: 13, padding: '8px 16px' }}>
           + Créer un utilisateur
@@ -196,6 +204,11 @@ export default function AdminUsersPage() {
       <div className="card" style={{ padding: 0, overflow: 'auto' }}>
         {loading ? (
           <p style={{ padding: '2rem', color: 'var(--rp-text-muted)', textAlign: 'center' }}>Chargement...</p>
+        ) : loadError ? (
+          <div style={{ padding: '2rem', textAlign: 'center' }}>
+            <p style={{ color: 'var(--rp-danger-text)', marginBottom: 12 }}>Erreur de chargement des utilisateurs</p>
+            <button className="btn-ghost" onClick={loadUsers}>Reessayer</button>
+          </div>
         ) : (
           <table className="admin-table">
             <thead>

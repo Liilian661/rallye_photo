@@ -9,7 +9,6 @@ import { emitToEvent } from '../config/socket';
 import { getEventLimit } from '../config/plans';
 import { deleteFromS3 } from '../utils/s3Service';
 // audit: HIGH-008 / CRIT-001 — auth participant pour le vote
-import { requireParticipant, ParticipantRequest } from '../middleware/participantAuth';
 import { rateLimiter } from '../middleware/rateLimiter';
 
 const router = Router();
@@ -19,7 +18,7 @@ router.get('/events/:eventId/challenges', rateLimiter(60, 60000), async (req, re
   try {
     const [rows] = await pool.execute(
       'SELECT id, title, description, points, status, sort_order, notified, created_at FROM challenges WHERE event_id = ? ORDER BY sort_order ASC, created_at ASC',
-      [req.params.eventId]
+      [req.params.eventId as string]
     );
     res.json(rows);
   } catch (error) {
@@ -92,7 +91,8 @@ router.post('/events/:eventId/challenges', requireAuth, validateBody(createChall
 // POST /challenges/:id/winner/:submissionId
 router.post('/challenges/:id/winner/:submissionId', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id, submissionId } = req.params;
+    const id = req.params.id as string;
+    const submissionId = req.params.submissionId as string;
 
     const [challengeRows] = await pool.execute(
       'SELECT c.id, c.event_id FROM challenges c JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
@@ -141,7 +141,7 @@ router.post('/challenges/:id/winner/:submissionId', requireAuth, async (req: Aut
 // POST /challenges/:id/reveal
 router.post('/challenges/:id/reveal', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const [rows] = await pool.execute(
       'SELECT c.event_id, s.id as submission_id, s.participant_id, s.photo_url, p.name as winner_name, c.title, c.points FROM challenges c JOIN submissions s ON s.challenge_id = c.id AND s.is_winner = TRUE JOIN participants p ON p.id = s.participant_id JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
@@ -185,7 +185,7 @@ const patchChallengeSchema = z.object({
 
 router.patch('/challenges/:id', requireAuth, validateBody(patchChallengeSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { title, description, points, sort_order } = req.body;
 
     // Verifie que le challenge appartient a un event de l'utilisateur authentifie
@@ -224,9 +224,10 @@ router.patch('/challenges/:id', requireAuth, validateBody(patchChallengeSchema),
 // DELETE /challenges/:id
 router.delete('/challenges/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const id = req.params.id as string;
     const [rows] = await pool.execute(
       'SELECT c.id, c.event_id FROM challenges c JOIN events e ON e.id = c.event_id WHERE c.id = ? AND e.user_id = ?',
-      [req.params.id, req.user!.userId]
+      [id, req.user!.userId]
     );
     if ((rows as any[]).length === 0) {
       res.status(404).json({ error: 'Defi non trouve' });
@@ -236,7 +237,7 @@ router.delete('/challenges/:id', requireAuth, async (req: AuthRequest, res: Resp
     // Collect S3 keys before deletion
     const [subRows] = await pool.execute(
       'SELECT photo_key FROM submissions WHERE challenge_id = ? AND photo_key IS NOT NULL',
-      [req.params.id]
+      [id]
     );
     const s3Keys: string[] = (subRows as any[]).map((s: any) => s.photo_key);
 
@@ -244,9 +245,9 @@ router.delete('/challenges/:id', requireAuth, async (req: AuthRequest, res: Resp
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      await conn.execute('DELETE FROM votes WHERE challenge_id = ?', [req.params.id]);
-      await conn.execute('DELETE FROM submissions WHERE challenge_id = ?', [req.params.id]);
-      await conn.execute('DELETE FROM challenges WHERE id = ?', [req.params.id]);
+      await conn.execute('DELETE FROM votes WHERE challenge_id = ?', [id]);
+      await conn.execute('DELETE FROM submissions WHERE challenge_id = ?', [id]);
+      await conn.execute('DELETE FROM challenges WHERE id = ?', [id]);
       await conn.commit();
     } catch (txError) {
       await conn.rollback();

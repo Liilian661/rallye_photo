@@ -35,6 +35,7 @@ function fileToBase64(file: File): Promise<string> {
 
 function base64ToFile(base64: string, name: string, type: string): File {
   const arr = base64.split(',');
+  if (arr.length < 2) throw new Error('Invalid base64 data URL (no comma separator)');
   const bstr = atob(arr[1]);
   const u8arr = new Uint8Array(bstr.length);
   for (let i = 0; i < bstr.length; i++) u8arr[i] = bstr.charCodeAt(i);

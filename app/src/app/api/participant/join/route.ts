@@ -28,13 +28,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'API indisponible' }, { status: 502 });
   }
 
-  const data = await upstream.json();
+  let data: unknown;
+  try {
+    data = await upstream.json();
+  } catch {
+    return NextResponse.json({ error: 'Réponse API invalide' }, { status: 502 });
+  }
   if (!upstream.ok) {
     return NextResponse.json(data, { status: upstream.status });
   }
 
   // Strip token from client-visible response — stored server-side as HttpOnly cookie
-  const { participantToken, ...publicData } = data as {
+  const { participantToken, ...publicData } = (data ?? {}) as {
     participantToken?: string;
     [k: string]: unknown;
   };

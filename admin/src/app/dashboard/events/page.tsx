@@ -23,6 +23,7 @@ interface Event {
 
 export default function AdminEventsPage() {
   const [events, setEvents] = useState<Event[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
   // audit: INFO-031 — distinguer l'etat 'erreur reseau' de l'etat 'liste vide' (ne plus afficher
   // 'Aucun evenement' quand l'API a en realite echoue).
@@ -31,12 +32,16 @@ export default function AdminEventsPage() {
 
   const loadEvents = useCallback(async () => {
     setLoadError(false);
+    setLoading(true);
     try {
       // audit: INFO-034 — params type au lieu de `any`.
       const params: Record<string, string> = {};
       if (filterStatus) params.status = filterStatus;
       const { data } = await api.get('/admin/events', { params });
-      setEvents(Array.isArray(data) ? data : (data.events ?? []));
+      const list: Event[] = Array.isArray(data) ? data : (data.events ?? []);
+      setEvents(list);
+      // Utiliser le total paginé si disponible, sinon longueur locale.
+      setTotal(typeof data.total === 'number' ? data.total : list.length);
     } catch (err) {
       console.error(err);
       setLoadError(true); // audit: INFO-031
@@ -62,7 +67,7 @@ export default function AdminEventsPage() {
   return (
     <div className="fade-in">
       <h2 style={{ fontFamily: 'var(--font-display)', fontSize: 24, fontWeight: 700, marginBottom: 20 }}>
-        Evenements ({events.length})
+        Evenements ({total})
       </h2>
 
       {/* Filter */}
@@ -89,7 +94,7 @@ export default function AdminEventsPage() {
           // audit: INFO-031 — etat d'erreur explicite avec bouton Reessayer (distinct de la liste vide).
           <div style={{ padding: '2rem', textAlign: 'center' }}>
             <p style={{ color: 'var(--rp-danger-text)', marginBottom: 12 }}>Erreur de chargement des evenements</p>
-            <button className="btn-ghost" onClick={() => { setLoading(true); loadEvents(); }}>Reessayer</button>
+            <button className="btn-ghost" onClick={loadEvents}>Reessayer</button>
           </div>
         ) : events.length === 0 ? (
           <p style={{ padding: '2rem', color: 'var(--rp-text-muted)', textAlign: 'center' }}>Aucun evenement</p>

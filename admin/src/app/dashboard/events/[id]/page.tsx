@@ -59,14 +59,19 @@ export default function AdminEventDetailPage() {
 
   // audit: INFO-026 — loadData memoise via useCallback([eventId]) et inclus dans les deps du
   // useEffect (coherent avec events/page.tsx et users/page.tsx ; respecte exhaustive-deps).
-  const loadData = useCallback(async () => {
+  // signal optionnel : fourni par le useEffect (cleanup via AbortController), absent sur les
+  // recharges declenchees manuellement (ex. suppression d'un participant).
+  const loadData = useCallback(async (signal?: AbortSignal) => {
+    setLoading(true);
     try {
-      const { data } = await api.get(`/admin/events/${eventId}`);
-      setEvent(data.event);
-      setChallenges(data.challenges);
-      setParticipants(data.participants);
-      setSubmissions(data.submissions);
-    } catch (err) {
+      const { data } = await api.get(`/admin/events/${eventId}`, { signal });
+      // Guards null/undefined : l'API peut omettre ces champs si l'event est vide.
+      setEvent(data.event ?? null);
+      setChallenges(Array.isArray(data.challenges) ? data.challenges : []);
+      setParticipants(Array.isArray(data.participants) ? data.participants : []);
+      setSubmissions(Array.isArray(data.submissions) ? data.submissions : []);
+    } catch (err: any) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       console.error(err);
     } finally {
       setLoading(false);
@@ -74,7 +79,9 @@ export default function AdminEventDetailPage() {
   }, [eventId]);
 
   useEffect(() => {
-    loadData();
+    const ctrl = new AbortController();
+    loadData(ctrl.signal);
+    return () => ctrl.abort();
   }, [loadData]);
 
   // audit: INFO-027 — pre-calculer un index Map<participant_id, {count, wins}> via useMemo

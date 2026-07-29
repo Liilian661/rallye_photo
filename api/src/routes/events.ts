@@ -10,8 +10,7 @@ import { validateBody } from '../middleware/validateInput';
 import { rateLimiter } from '../middleware/rateLimiter';
 import { createEventSchema, updateEventSchema } from '../utils/validators';
 import { generateUniqueEventCode } from '../utils/codeGenerator';
-import { emitToEvent } from '../config/socket';
-import { resolveEventTier, getEventLimit, USER_PLANS, EVENT_TIER_LIMITS, EventTier } from '../config/plans';
+import { resolveEventTier, USER_PLANS, EVENT_TIER_LIMITS, EventTier } from '../config/plans';
 import { generateEventPhotoSecret } from '../utils/photoToken';
 import { getS3Client, getS3Config, uploadToS3, deleteFromS3 } from '../utils/s3Service';
 import multer from 'multer';
@@ -132,11 +131,11 @@ router.post('/', requireAuth, rateLimiter(5, 60000), validateBody(createEventSch
 // GET /events/join/:code
 router.get('/join/:code', rateLimiter(30, 60000), async (req, res: Response): Promise<void> => {
   try {
-    const { code } = req.params;
+    const code = req.params.code as string;
 
     const [rows] = await pool.execute(
       'SELECT id, name, description, event_date, deadline, code, gallery_enabled, team_mode, theme_color, logo_key, banner_key, photo_secret, status, tier FROM events WHERE code = ?',
-      [(code as string).toUpperCase()]
+      [code.toUpperCase()]
     );
     const events = rows as any[];
 
@@ -182,6 +181,7 @@ router.get('/join/:code', rateLimiter(30, 60000), async (req, res: Response): Pr
 // GET /events/:id
 router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const eventId = req.params.id as string;
     // audit: HIGH-009 - selection explicite des colonnes : ne JAMAIS renvoyer
     // photo_secret (utilise pour signer les tokens photo). photo_secret est lu
     // separement uniquement pour generer les URLs signees ci-dessous.
@@ -191,7 +191,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
               theme_color, logo_key, banner_key, status, tier, created_at,
               photo_secret
        FROM events WHERE id = ? AND user_id = ?`,
-      [req.params.id, req.user!.userId]
+      [eventId, req.user!.userId]
     );
     const events = rows as any[];
 
@@ -228,6 +228,7 @@ router.get('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise
 // PATCH /events/:id
 router.patch('/:id', requireAuth, validateBody(updateEventSchema), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const eventId = req.params.id as string;
     const { name, description, eventDate, deadline, galleryEnabled, status, scoringMode, teamMode } = req.body;
 
     // Validation assurée par validateBody(updateEventSchema) — Zod reject avant d'arriver ici.
@@ -249,7 +250,7 @@ router.patch('/:id', requireAuth, validateBody(updateEventSchema), async (req: A
       return;
     }
 
-    values.push(req.params.id, req.user!.userId);
+    values.push(eventId, req.user!.userId);
 
     const [result] = await pool.execute(
       'UPDATE events SET ' + fields.join(', ') + ' WHERE id = ? AND user_id = ?',
@@ -270,7 +271,7 @@ router.patch('/:id', requireAuth, validateBody(updateEventSchema), async (req: A
 // DELETE /events/:id
 router.delete('/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const eventId = req.params.id;
+    const eventId = req.params.id as string;
 
     // Verify ownership and collect S3 keys before deleting
     const [eventRows] = await pool.execute(
@@ -308,9 +309,10 @@ router.delete('/:id', requireAuth, async (req: AuthRequest, res: Response): Prom
 // GET /events/:id/qr-pdf
 router.get('/:id/qr-pdf', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const eventId = req.params.id as string;
     const [rows] = await pool.execute(
       'SELECT id, name, code, event_date FROM events WHERE id = ? AND user_id = ?',
-      [req.params.id, req.user!.userId]
+      [eventId, req.user!.userId]
     );
     const events = rows as any[];
     if (events.length === 0) {
@@ -438,16 +440,17 @@ router.get('/:id/qr-pdf', requireAuth, async (req: AuthRequest, res: Response): 
     doc.end();
   } catch (error) {
     console.error('QR PDF error:', error);
-    res.status(500).json({ error: 'Erreur generation PDF' });
+    if (!res.headersSent) res.status(500).json({ error: 'Erreur generation PDF' });
   }
 });
 
 // GET /events/:id/export-zip
 router.get('/:id/export-zip', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const eventId = req.params.id as string;
     const [eventRows] = await pool.execute(
       'SELECT id, name, code, tier FROM events WHERE id = ? AND user_id = ?',
-      [req.params.id, req.user!.userId]
+      [eventId, req.user!.userId]
     );
     if ((eventRows as any[]).length === 0) {
       res.status(404).json({ error: 'Evenement non trouve' });
@@ -479,7 +482,7 @@ router.get('/:id/export-zip', requireAuth, async (req: AuthRequest, res: Respons
        WHERE s.event_id = ?
        ORDER BY c.title, p.name
        LIMIT ${EXPORT_ZIP_MAX}`,
-      [req.params.id]
+      [eventId]
     );
     const submissions = subRows as any[];
 
@@ -558,7 +561,8 @@ const brandingUpload = multer({
 // POST /events/:id/logo
 router.post('/:id/logo', requireAuth, brandingUpload.single('logo'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const [rows] = await pool.execute('SELECT id, code, photo_secret, tier FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const eventId = req.params.id as string;
+    const [rows] = await pool.execute('SELECT id, code, photo_secret, tier FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
     if ((rows as any[]).length === 0) { res.status(404).json({ error: 'Evenement non trouve' }); return; }
     if (!req.file) { res.status(400).json({ error: 'Fichier manquant' }); return; }
 
@@ -572,7 +576,7 @@ router.post('/:id/logo', requireAuth, brandingUpload.single('logo'), async (req:
     const key = `${event.code}/branding/logo.webp`;
 
     await uploadToS3(key, buffer, 'image/webp');
-    await pool.execute('UPDATE events SET logo_key = ? WHERE id = ?', [key, req.params.id]);
+    await pool.execute('UPDATE events SET logo_key = ? WHERE id = ?', [key, eventId]);
 
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
     const url = apiBase + '/photos/' + await signPhotoToken(key, event.id, event.photo_secret, 86400);
@@ -586,7 +590,8 @@ router.post('/:id/logo', requireAuth, brandingUpload.single('logo'), async (req:
 // POST /events/:id/banner
 router.post('/:id/banner', requireAuth, brandingUpload.single('banner'), async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const [rows] = await pool.execute('SELECT id, code, photo_secret, tier FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const eventId = req.params.id as string;
+    const [rows] = await pool.execute('SELECT id, code, photo_secret, tier FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
     if ((rows as any[]).length === 0) { res.status(404).json({ error: 'Evenement non trouve' }); return; }
     if (!req.file) { res.status(400).json({ error: 'Fichier manquant' }); return; }
 
@@ -600,7 +605,7 @@ router.post('/:id/banner', requireAuth, brandingUpload.single('banner'), async (
     const key = `${event.code}/branding/banner.webp`;
 
     await uploadToS3(key, buffer, 'image/webp');
-    await pool.execute('UPDATE events SET banner_key = ? WHERE id = ?', [key, req.params.id]);
+    await pool.execute('UPDATE events SET banner_key = ? WHERE id = ?', [key, eventId]);
 
     const apiBase = process.env.API_URL || 'https://api.rallye-photo.com';
     const url = apiBase + '/photos/' + await signPhotoToken(key, event.id, event.photo_secret, 86400);
@@ -614,19 +619,21 @@ router.post('/:id/banner', requireAuth, brandingUpload.single('banner'), async (
 // DELETE /events/:id/logo
 router.delete('/:id/logo', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const eventId = req.params.id as string;
     // audit: LOW-030 - recuperer la cle S3 avant de la perdre (NULL) puis supprimer l'objet
-    const [rows] = await pool.execute('SELECT logo_key FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const [rows] = await pool.execute('SELECT logo_key FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
     if ((rows as any[]).length === 0) {
       res.status(404).json({ error: 'Evenement non trouve' });
       return;
     }
     const key = (rows as any[])[0]?.logo_key;
-    await pool.execute('UPDATE events SET logo_key = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    await pool.execute('UPDATE events SET logo_key = NULL WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
     if (key) {
       deleteFromS3(key).catch(err => console.error('S3 delete logo error for', key, err));
     }
     res.json({ message: 'Logo supprime' });
   } catch (error) {
+    console.error('Delete logo error:', error);
     res.status(500).json({ error: 'Erreur' });
   }
 });
@@ -634,19 +641,21 @@ router.delete('/:id/logo', requireAuth, async (req: AuthRequest, res: Response):
 // DELETE /events/:id/banner
 router.delete('/:id/banner', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const eventId = req.params.id as string;
     // audit: LOW-030 - recuperer la cle S3 avant de la perdre (NULL) puis supprimer l'objet
-    const [rows] = await pool.execute('SELECT banner_key FROM events WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    const [rows] = await pool.execute('SELECT banner_key FROM events WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
     if ((rows as any[]).length === 0) {
       res.status(404).json({ error: 'Evenement non trouve' });
       return;
     }
     const key = (rows as any[])[0]?.banner_key;
-    await pool.execute('UPDATE events SET banner_key = NULL WHERE id = ? AND user_id = ?', [req.params.id, req.user!.userId]);
+    await pool.execute('UPDATE events SET banner_key = NULL WHERE id = ? AND user_id = ?', [eventId, req.user!.userId]);
     if (key) {
       deleteFromS3(key).catch(err => console.error('S3 delete banner error for', key, err));
     }
     res.json({ message: 'Banniere supprimee' });
   } catch (error) {
+    console.error('Delete banner error:', error);
     res.status(500).json({ error: 'Erreur' });
   }
 });

@@ -6,7 +6,7 @@ import api, { participantApi } from '@/lib/api';
 import { getParticipant, getParticipantToken } from '@/lib/participant';
 import { IconCamera, IconCheckCircle, IconLock, IconClock, IconAlarm, IconLoader, IconGallery, IconX } from '@/lib/icons';
 import CameraModal from '@/components/CameraModal';
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
 import { enqueueUpload, getPendingUploads, removeFromQueue, restoreFile, getQueueSize } from '@/lib/offlineQueue';
 
 interface EventInfo {
@@ -84,7 +84,7 @@ export default function EventPage() {
   const params = useParams();
   const router = useRouter();
   const eventId = params.id as string;
-  const socketRef = useRef<Socket | null>(null);
+  const uploadSuccessTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const [event, setEvent] = useState<EventInfo | null>(null);
   const [challenges, setChallenges] = useState<Challenge[]>([]);
@@ -197,6 +197,19 @@ export default function EventPage() {
     return () => clearInterval(interval);
   }, [event]);
 
+  // Fermeture du lightbox à la touche Escape (window listener — fiable même sans focus sur le div)
+  useEffect(() => {
+    if (!previewUrl) return;
+    const handleKeyDown = (e: KeyboardEvent) => { if (e.key === 'Escape') setPreviewUrl(null); };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [previewUrl]);
+
+  // Nettoyage du timer uploadSuccess au démontage
+  useEffect(() => {
+    return () => { if (uploadSuccessTimerRef.current) clearTimeout(uploadSuccessTimerRef.current); };
+  }, []);
+
   useEffect(() => {
     if (!eventId) return;
 
@@ -227,8 +240,6 @@ export default function EventPage() {
           loadData();
         }
       });
-
-      socketRef.current = socket;
     });
 
     return () => {
@@ -348,7 +359,8 @@ export default function EventPage() {
       setUploadingChallengeId(null);
       setUploadProgress('');
       await loadData();
-      setTimeout(() => setUploadSuccess(null), 3000);
+      if (uploadSuccessTimerRef.current) clearTimeout(uploadSuccessTimerRef.current);
+      uploadSuccessTimerRef.current = setTimeout(() => setUploadSuccess(null), 3000);
     } catch (err: any) {
       const status = err.response?.status;
       if (attempt < MAX_RETRIES && (!status || status >= 500 || err.code === 'ECONNABORTED')) {

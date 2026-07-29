@@ -32,7 +32,7 @@ export default function DashboardPage() {
     setLoading(true);
     setLoadError(false);
     api.get('/events', { signal })
-      .then(({ data }) => setEvents(data))
+      .then(({ data }) => setEvents(Array.isArray(data) ? data : []))
       .catch((err) => {
         if (err.name === 'CanceledError' || err.name === 'AbortError') return;
         console.error(err);

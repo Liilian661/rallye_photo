@@ -92,7 +92,7 @@ export default function GalleryPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [selectedPhoto]);
 
-  const groupedByChallenge = gallery?.photos.reduce((acc, photo) => {
+  const groupedByChallenge = (gallery?.photos ?? []).reduce((acc, photo) => {
     if (!acc[photo.challenge_id]) {
       acc[photo.challenge_id] = { title: photo.challenge_title, photos: [] };
     }

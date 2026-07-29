@@ -2,7 +2,9 @@ import bcrypt from 'bcrypt';
 import jwt, { SignOptions } from 'jsonwebtoken';
 import crypto from 'crypto';
 
-const BCRYPT_ROUNDS = Math.max(10, parseInt(process.env.BCRYPT_ROUNDS || '12'));
+// Le fallback || 12 protège contre une valeur non numérique (parseInt retourne
+// NaN pour "abc"), ce qui ferait retourner NaN à Math.max et planterait bcrypt.
+const BCRYPT_ROUNDS = Math.max(10, parseInt(process.env.BCRYPT_ROUNDS || '12') || 12);
 const JWT_SECRET = process.env.JWT_SECRET;
 if (!JWT_SECRET) {
   throw new Error('[Startup] JWT_SECRET est requis. Définissez-le dans votre .env');

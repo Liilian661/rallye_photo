@@ -124,8 +124,8 @@ router.get('/users', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const search = req.query.search as string || '';
     const plan = req.query.plan as string || '';
-    const page = Math.max(1, parseInt(req.query.page as string || '1', 10));
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string || '50', 10)));
+    const page = Math.max(1, parseInt(req.query.page as string || '1', 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string || '50', 10) || 50));
     const offset = (page - 1) * limit;
 
     let whereClause = 'WHERE 1=1';
@@ -211,7 +211,7 @@ router.post('/users', validateBody(adminCreateUserSchema), async (req: AuthReque
 // PATCH /admin/users/:id
 router.patch('/users/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     const { plan, is_admin } = req.body;
 
     // audit: MED-014 - validation stricte des entrees (pas de validateBody sur cette route)
@@ -266,7 +266,7 @@ router.patch('/users/:id', async (req: AuthRequest, res: Response): Promise<void
 // DELETE /admin/users/:id
 router.delete('/users/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     // Prevent self-delete
     if (id === req.user!.userId) {
@@ -347,8 +347,8 @@ router.get('/events', async (req: AuthRequest, res: Response): Promise<void> => 
       return;
     }
 
-    const page = Math.max(1, parseInt(req.query.page as string || '1', 10));
-    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string || '50', 10)));
+    const page = Math.max(1, parseInt(req.query.page as string || '1', 10) || 1);
+    const limit = Math.min(200, Math.max(1, parseInt(req.query.limit as string || '50', 10) || 50));
     const offset = (page - 1) * limit;
 
     let whereClause = 'WHERE 1=1';
@@ -388,7 +388,7 @@ router.get('/events', async (req: AuthRequest, res: Response): Promise<void> => 
 // GET /admin/events/:id
 router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const [eventRows] = await pool.execute(
       `SELECT e.id, e.name, e.description, e.code, e.status, e.deadline, e.event_date,
@@ -444,7 +444,7 @@ router.get('/events/:id', async (req: AuthRequest, res: Response): Promise<void>
 // DELETE /admin/events/:id
 router.delete('/events/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     // audit: LOW-046 - verifier l'existence avant suppression (404 si inexistant)
     const [evRows] = await pool.execute('SELECT id, logo_key, banner_key FROM events WHERE id = ?', [id]);
@@ -614,7 +614,7 @@ router.post('/settings/s3/test', async (_req: AuthRequest, res: Response): Promi
 // GET /admin/events/:id/download-zip
 router.get('/events/:id/download-zip', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
     // Get event info
     const [eventRows] = await pool.execute('SELECT code, name FROM events WHERE id = ?', [id]);
     const event = (eventRows as any[])[0];
@@ -753,7 +753,7 @@ router.get('/affiliates', async (_req: AuthRequest, res: Response): Promise<void
       `SELECT u.id, u.first_name, u.last_name, u.email, COUNT(r.id) as referred_count
        FROM referrals r
        JOIN users u ON u.id = r.referrer_id
-       GROUP BY r.referrer_id
+       GROUP BY u.id, u.first_name, u.last_name, u.email
        ORDER BY referred_count DESC
        LIMIT 10`
     );
@@ -768,7 +768,7 @@ router.get('/affiliates', async (_req: AuthRequest, res: Response): Promise<void
 // Le panel échange ce code via POST /auth/impersonate-exchange (cookies HttpOnly posés par l'API).
 router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { userId } = req.params;
+    const userId = req.params.userId as string;
 
     // audit: HIGH-012 - lire aussi is_admin pour interdire d'impersonner un admin
     const [rows] = await pool.execute(
@@ -807,7 +807,7 @@ router.post('/impersonate/:userId', async (req: AuthRequest, res: Response): Pro
 // DELETE /admin/participants/:id - Remove a participant and their submissions
 router.delete('/participants/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { id } = req.params;
+    const id = req.params.id as string;
 
     const [rows] = await pool.execute('SELECT id, event_id FROM participants WHERE id = ?', [id]);
     if ((rows as any[]).length === 0) {

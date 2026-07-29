@@ -3,14 +3,13 @@ import { z } from 'zod';
 import { v4 as uuidv4 } from 'uuid';
 import pool from '../config/database';
 import { requireAuth, AuthRequest } from '../middleware/auth';
-import { emitToEvent } from '../config/socket';
 
 const router = Router();
 
 // POST /events/:eventId/teams - Create a team
 router.post('/events/:eventId/teams', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { eventId } = req.params;
+    const { eventId } = req.params as { eventId: string };
     const { name, color } = req.body;
 
     // audit: LOW-024 - validation du nom (longueur)
@@ -52,7 +51,7 @@ router.post('/events/:eventId/teams', requireAuth, async (req: AuthRequest, res:
       'SELECT COUNT(*) as count FROM teams WHERE event_id = ?',
       [eventId]
     );
-    if ((teamCount as any[])[0].count >= MAX_TEAMS) {
+    if (Number((teamCount as any[])[0].count) >= MAX_TEAMS) {
       res.status(403).json({ error: 'Limite du nombre d\'equipes atteinte' });
       return;
     }
@@ -73,7 +72,7 @@ router.post('/events/:eventId/teams', requireAuth, async (req: AuthRequest, res:
 // GET /events/:eventId/teams - List teams with member count and score
 router.get('/events/:eventId/teams', async (req, res: Response): Promise<void> => {
   try {
-    const { eventId } = req.params;
+    const { eventId } = req.params as { eventId: string };
 
     // audit: LOW-026 - ne pas exposer les equipes d'un evenement archive/inexistant.
     // TODO(audit:LOW-026): la liste reste publique car l'app participant n'a pas
@@ -111,9 +110,10 @@ router.get('/events/:eventId/teams', async (req, res: Response): Promise<void> =
 // DELETE /teams/:id - Delete a team
 router.delete('/teams/:id', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
+    const teamId = req.params.id as string;
     const [rows] = await pool.execute(
       'SELECT t.id, t.event_id FROM teams t JOIN events e ON e.id = t.event_id WHERE t.id = ? AND e.user_id = ?',
-      [req.params.id, req.user!.userId]
+      [teamId, req.user!.userId]
     );
     if ((rows as any[]).length === 0) {
       res.status(404).json({ error: 'Equipe non trouvee' });
@@ -124,8 +124,8 @@ router.delete('/teams/:id', requireAuth, async (req: AuthRequest, res: Response)
     const conn = await pool.getConnection();
     try {
       await conn.beginTransaction();
-      await conn.execute('UPDATE participants SET team_id = NULL WHERE team_id = ?', [req.params.id]);
-      await conn.execute('DELETE FROM teams WHERE id = ?', [req.params.id]);
+      await conn.execute('UPDATE participants SET team_id = NULL WHERE team_id = ?', [teamId]);
+      await conn.execute('DELETE FROM teams WHERE id = ?', [teamId]);
       await conn.commit();
     } catch (txErr) {
       await conn.rollback();
@@ -148,7 +148,7 @@ const updateTeamSchema = z.object({
 
 router.patch('/teams/:teamId', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { teamId } = req.params;
+    const { teamId } = req.params as { teamId: string };
 
     const parsed = updateTeamSchema.safeParse(req.body);
     if (!parsed.success) {

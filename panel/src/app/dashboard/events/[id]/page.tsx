@@ -154,25 +154,26 @@ export default function EventDetailPage() {
   const [editSaving, setEditSaving] = useState(false);
   const [notifyLoading, setNotifyLoading] = useState(false);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (signal?: AbortSignal) => {
     try {
       const [eventRes, challengesRes, submissionsRes] = await Promise.all([
-        api.get(`/events/${eventId}`),
-        api.get(`/events/${eventId}/challenges`),
-        api.get(`/events/${eventId}/submissions`),
+        api.get(`/events/${eventId}`, { signal }),
+        api.get(`/events/${eventId}/challenges`, { signal }),
+        api.get(`/events/${eventId}/submissions`, { signal }),
       ]);
       setEvent(eventRes.data);
-      setChallenges(challengesRes.data);
-      setSubmissions(submissionsRes.data);
+      setChallenges(Array.isArray(challengesRes.data) ? challengesRes.data : []);
+      setSubmissions(Array.isArray(submissionsRes.data) ? submissionsRes.data : []);
 
       // Load teams if team mode
       if (eventRes.data.team_mode) {
         try {
-          const teamsRes = await api.get(`/events/${eventId}/teams`);
-          setTeams(teamsRes.data);
+          const teamsRes = await api.get(`/events/${eventId}/teams`, { signal });
+          setTeams(Array.isArray(teamsRes.data) ? teamsRes.data : []);
         } catch { /* ignore */ }
       }
-    } catch (err) {
+    } catch (err: any) {
+      if (err.name === 'CanceledError' || err.name === 'AbortError') return;
       console.error(err);
     } finally {
       setLoading(false);
@@ -180,7 +181,9 @@ export default function EventDetailPage() {
   }, [eventId]);
 
   useEffect(() => {
-    loadData();
+    const ctrl = new AbortController();
+    loadData(ctrl.signal);
+    return () => ctrl.abort();
   }, [loadData]);
 
   // Charger la liste des participants
@@ -191,8 +194,7 @@ export default function EventDetailPage() {
     setParticipantsError(null);
     api.get(`/events/${eventId}/participants`, { signal: controller.signal })
       .then(({ data }) => {
-        // Calculer le nombre de soumissions par participant depuis le state existant
-        setParticipants(data as Participant[]);
+        setParticipants(Array.isArray(data) ? data : []);
         setParticipantsLoading(false);
       })
       .catch((err: any) => {
@@ -211,7 +213,7 @@ export default function EventDetailPage() {
     setLeaderboardError(null);
     api.get(`/events/${eventId}/leaderboard`, { signal: controller.signal })
       .then(({ data }) => {
-        setLeaderboard(data as LeaderboardEntry[]);
+        setLeaderboard(Array.isArray(data) ? data : []);
         setLeaderboardLoading(false);
       })
       .catch((err: any) => {
@@ -300,7 +302,7 @@ export default function EventDetailPage() {
     if (!confirm('Supprimer cet evenement et toutes ses donnees ?')) return;
     try {
       await api.delete(`/events/${eventId}`);
-      router.push('/dashboard/events');
+      router.replace('/dashboard/events');
     } catch (err: any) {
       alert(err.response?.data?.error || 'Erreur');
     }

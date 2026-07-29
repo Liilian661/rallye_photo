@@ -13,5 +13,7 @@ export async function GET(
     return NextResponse.json({ error: 'Non authentifie' }, { status: 401 });
   }
 
-  return NextResponse.json({ token });
+  return NextResponse.json({ token }, {
+    headers: { 'Cache-Control': 'no-store, private' },
+  });
 }

@@ -39,18 +39,24 @@ export default function EventsPage() {
   // s'affiche meme quand l'API a echoue).
   const [loadError, setLoadError] = useState(false);
 
-  const loadEvents = () => {
+  const loadEvents = (signal?: AbortSignal) => {
     setLoading(true);
     setLoadError(false);
-    api.get('/events')
-      .then(({ data }) => setEvents(data))
-      .catch((err) => { console.error(err); setLoadError(true); })
+    api.get('/events', { signal })
+      .then(({ data }) => setEvents(Array.isArray(data) ? data : []))
+      .catch((err) => {
+        if (err.name === 'CanceledError' || err.name === 'AbortError') return;
+        console.error(err);
+        setLoadError(true);
+      })
       .finally(() => setLoading(false));
   };
 
   useEffect(() => {
-    loadEvents();
-  }, []);
+    const ctrl = new AbortController();
+    loadEvents(ctrl.signal);
+    return () => ctrl.abort();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="fade-in">
@@ -82,7 +88,7 @@ export default function EventsPage() {
           <p style={{ fontSize: 15, color: 'var(--rp-danger-text)', marginBottom: '1rem' }}>
             Erreur de chargement des événements.
           </p>
-          <button className="btn-secondary" onClick={loadEvents}>Réessayer</button>
+          <button className="btn-secondary" onClick={() => loadEvents()}>Réessayer</button>
         </div>
       ) : events.length === 0 ? (
         <div className="card" style={{ textAlign: 'center', padding: '3rem' }}>

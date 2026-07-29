@@ -233,7 +233,9 @@ router.post('/resend-verification', rateLimiter(3, 60000), requireAuth, async (r
       [newTokenHash, newTokenExpires, user.id]
     );
 
-    await sendVerificationEmail(user.email, user.first_name, newToken);
+    sendVerificationEmail(user.email, user.first_name, newToken).catch((err) => {
+      console.error('Failed to resend verification email:', err);
+    });
 
     res.json({ message: 'Email de verification renvoye' });
   } catch (error) {
@@ -529,10 +531,10 @@ router.post('/logout', requireAuth, async (req: AuthRequest, res: Response): Pro
     }
 
     // GC opportuniste : supprimer les tokens deja expires de cet utilisateur.
-    await pool.execute(
+    pool.execute(
       'DELETE FROM refresh_tokens WHERE user_id = ? AND expires_at < NOW()',
       [req.user!.userId]
-    );
+    ).catch(() => {});
 
     logAudit('user.logout', { userId: req.user!.userId, ip: getIp(req) });
 
@@ -633,7 +635,7 @@ router.patch('/me', requireAuth, async (req: AuthRequest, res: Response): Promis
       return;
     }
 
-    await logAudit('user.update_profile', {
+    logAudit('user.update_profile', {
       userId,
       details: { updatedFields: Object.keys(parsed.data) },
       ip: getIp(req),
@@ -673,15 +675,14 @@ router.post('/impersonate-exchange', rateLimiter(5, 60000), async (req, res: Res
       return;
     }
 
-    const { generateAccessToken, generateRefreshToken, hashToken } = require('../utils/crypto');
-
     const accessToken  = generateAccessToken({ userId: user.id, email: user.email, impersonatedBy: entry.adminId });
     const refreshToken = generateRefreshToken();
     const hashedRefresh = hashToken(refreshToken);
+    const impersonateFamilyId = uuidv4();
 
     await pool.execute(
-      'INSERT INTO refresh_tokens (id, user_id, token_hash, impersonated_by, expires_at) VALUES (?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
-      [uuidv4(), user.id, hashedRefresh, entry.adminId]
+      'INSERT INTO refresh_tokens (id, user_id, token_hash, family_id, impersonated_by, expires_at) VALUES (?, ?, ?, ?, ?, DATE_ADD(NOW(), INTERVAL 1 HOUR))',
+      [uuidv4(), user.id, hashedRefresh, impersonateFamilyId, entry.adminId]
     );
 
     setAuthCookies(res, accessToken, refreshToken);

@@ -40,7 +40,12 @@ router.post('/checkout', checkoutLimiter, requireAuth, validateBody(checkoutSche
 
     // Vérification email avant toute création de session Stripe
     const [userRows] = await pool.execute('SELECT email_verified FROM users WHERE id = ?', [userId]);
-    if (!(userRows as any[])[0]?.email_verified) {
+    const userRow = (userRows as any[])[0];
+    if (!userRow) {
+      res.status(404).json({ error: 'Utilisateur non trouvé' });
+      return;
+    }
+    if (!userRow.email_verified) {
       res.status(403).json({ error: 'Vérification email requise avant paiement', code: 'EMAIL_NOT_VERIFIED' });
       return;
     }

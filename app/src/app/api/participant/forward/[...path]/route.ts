@@ -44,8 +44,12 @@ async function forward(request: NextRequest, ctx: Context, method: string): Prom
   });
 
   const upstreamHeaders: Record<string, string> = {};
+  // Do not forward Content-Type for bodyless methods — sending it without a body
+  // violates HTTP semantics and can confuse some servers.
   const origContentType = request.headers.get('content-type');
-  if (origContentType) upstreamHeaders['content-type'] = origContentType;
+  if (origContentType && method !== 'GET' && method !== 'HEAD') {
+    upstreamHeaders['content-type'] = origContentType;
+  }
   if (token) upstreamHeaders['authorization'] = `Bearer ${token}`;
 
   // Use blob() to preserve binary bodies (multipart uploads)
@@ -65,12 +69,22 @@ async function forward(request: NextRequest, ctx: Context, method: string): Prom
   const resContentType = upstream.headers.get('content-type') || '';
 
   if (resContentType.includes('application/json')) {
-    const json = await upstream.json();
+    let json: unknown;
+    try {
+      json = await upstream.json();
+    } catch {
+      return NextResponse.json({ error: 'Réponse API invalide' }, { status: 502 });
+    }
     return NextResponse.json(json, { status: upstream.status });
   }
 
   // Binary response (zip, pdf, image, etc.) — stream buffer through
-  const buffer = await upstream.arrayBuffer();
+  let buffer: ArrayBuffer;
+  try {
+    buffer = await upstream.arrayBuffer();
+  } catch {
+    return NextResponse.json({ error: 'Réponse API invalide' }, { status: 502 });
+  }
   const resHeaders = new Headers({ 'content-type': resContentType });
   const disposition = upstream.headers.get('content-disposition');
   if (disposition) resHeaders.set('content-disposition', disposition);
