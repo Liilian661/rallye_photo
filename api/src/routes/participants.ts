@@ -152,7 +152,7 @@ router.get('/events/:eventId/participants', requireParticipant, async (req: Part
 // DELETE /events/:eventId/participants/:participantId
 router.delete('/events/:eventId/participants/:participantId', requireAuth, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { eventId, participantId } = req.params;
+    const { eventId, participantId } = req.params as { eventId: string; participantId: string };
 
     // Verify event ownership
     const [eventRows] = await pool.execute(
