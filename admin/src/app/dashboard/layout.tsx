@@ -28,8 +28,10 @@ export default function AdminDashboardLayout({ children }: { children: React.Rea
   // Note: l'enforcement reel reste cote API (chaque route /admin/* doit exiger isAdmin) — TODO backend.
   useEffect(() => {
     let active = true;
-    const token = Cookies.get('adminAccessToken');
-    if (!token) {
+    // adminAccessToken est maintenant HttpOnly (posé par l'API) — non lisible en JS.
+    // On utilise adminUser (cookie JS posé après login réussi) comme garde rapide.
+    const savedUser = Cookies.get('adminUser');
+    if (!savedUser) {
       router.replace('/auth/login');
       return;
     }

@@ -2,7 +2,6 @@
 
 import { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import Cookies from 'js-cookie';
 import Sidebar from '../components/Sidebar';
 import { useAuth } from '@/lib/auth';
 
@@ -16,14 +15,13 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   }, [refreshUser]);
 
   useEffect(() => {
-    const token = Cookies.get('accessToken');
-    if (!token) {
+    if (loading) return;
+    if (!user) {
       router.replace('/auth/login');
       return;
     }
-
     // Block if email not verified (valeur rebasee sur /auth/me ci-dessus). audit: LOW-069
-    if (!loading && user && user.emailVerified === false) {
+    if (user.emailVerified === false) {
       router.replace('/auth/verify-pending');
     }
   }, [router, user, loading]);
